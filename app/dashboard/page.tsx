@@ -12,7 +12,6 @@ import { getSocket } from '../../lib/realtime';
 
 interface Me {
   tasks: { open: number; dueToday: number; overdue: number; blocked: number; inReview: number };
-  training: Array<{ planId: string; title: string; done: number; total: number; progressPct: number }>;
   reports: { last7: number; lateLast7: number; streak: number; reportedToday: boolean };
 }
 
@@ -93,19 +92,7 @@ export default function DashboardPage() {
         <AttentionRadar teamId={user.role === 'ADMIN' ? null : user.teamId} />
       )}
 
-      {me && me.training.length > 0 && (
-        <section className="card">
-          <h2 className="h2">My training progress</h2>
-          <div className="grid gap-5 sm:grid-cols-2">
-            {me.training.map((t) => (
-              <div key={t.planId}>
-                <div className="mb-1.5 flex justify-between text-sm"><span className="font-medium text-slate-700">{t.title}</span><span className="text-slate-500">{t.done}/{t.total} days · <b className="text-ink-900">{t.progressPct}%</b></span></div>
-                <ProgressBar pct={t.progressPct} tone="accent" />
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+
 
       {user.role === 'ADMIN' && extra && (
         <>

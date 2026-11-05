@@ -254,29 +254,16 @@ export class InsightsService {
     const todayStr = dayStr();
     const { start: todayStart, end: todayEnd } = dayRange(todayStr);
     const weekAgo = dayToDate(addDays(todayStr, -7));
-    const [byStatus, dueToday, overdue, plans, rep7, late7, recent] = await Promise.all([
+    const [byStatus, dueToday, overdue, rep7, late7, recent] = await Promise.all([
       this.prisma.task.groupBy({ by: ['status'], where: { ownerId: me.id }, _count: true }),
       this.prisma.task.count({ where: { ownerId: me.id, status: { not: 'DONE' }, dueDate: { gte: todayStart, lt: todayEnd } } }),
       this.prisma.task.count({ where: { ownerId: me.id, status: { not: 'DONE' }, dueDate: { lt: new Date() } } }),
-      me.batchId
-        ? this.prisma.trainingPlan.findMany({ where: { batchId: me.batchId }, select: { id: true, title: true, _count: { select: { items: true } } } })
-        : Promise.resolve([]),
       this.prisma.dailyReport.count({ where: { userId: me.id, reportDate: { gte: weekAgo } } }),
       this.prisma.dailyReport.count({ where: { userId: me.id, isLate: true, reportDate: { gte: weekAgo } } }),
       this.prisma.dailyReport.findMany({ where: { userId: me.id, reportDate: { gte: dayToDate(addDays(todayStr, -90)) } }, select: { reportDate: true } }),
     ]);
     const st = new Map(byStatus.map((r) => [r.status, r._count]));
     const open = byStatus.filter((r) => r.status !== 'DONE').reduce((s, r) => s + r._count, 0);
-
-    const doneByPlan = plans.length
-      ? await this.prisma.trainingProgress.findMany({
-          where: { userId: me.id, isDone: true, item: { planId: { in: plans.map((p) => p.id) } } },
-          select: { item: { select: { planId: true } } },
-        })
-      : [];
-    const doneCount = new Map<string, number>();
-    for (const d of doneByPlan) doneCount.set(d.item.planId, (doneCount.get(d.item.planId) ?? 0) + 1);
-    const training = plans.map((p) => ({ planId: p.id, title: p.title, done: doneCount.get(p.id) ?? 0, total: p._count.items, progressPct: rate(doneCount.get(p.id) ?? 0, p._count.items) }));
 
     // Streak = consecutive WORKING days with a report. Today does not break it until the deadline has passed.
     const have = new Set(recent.map((r) => r.reportDate.toISOString().slice(0, 10)));
@@ -290,7 +277,7 @@ export class InsightsService {
 
     return {
       tasks: { open, dueToday, overdue, blocked: st.get('BLOCKED') ?? 0, inReview: st.get('IN_REVIEW') ?? 0 },
-      training,
+      training: [],
       reports: { last7: rep7, lateLast7: late7, streak, reportedToday: have.has(todayStr) },
     };
   }

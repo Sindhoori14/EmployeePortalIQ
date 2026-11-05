@@ -1,8 +1,8 @@
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { RequestUser } from '../../common/decorators/current-user.decorator';
-import { SubmitReportDto, UpsertEvaluationDto } from '../learning/dto/learning.dto';
+import { SubmitReportDto } from './dto/reports.dto';
 import { WorkCalendarService } from '../../common/work-calendar.service';
 import { FileLinkService, LIVE_FILES } from '../../common/file-links.service';
 import { addDays, dayRange, dayStr, dayToDate, isValidDay } from '../../common/time';
@@ -105,21 +105,57 @@ export class ReportsService {
     });
   }
 
-  async list(me: RequestUser, q: { date?: string; teamId?: string; batchId?: string }) {
+  async list(me: RequestUser, q: { date?: string; teamId?: string; employeeId?: string; batchId?: string }) {
     if (me.role === 'EMPLOYEE') throw new ForbiddenException('Use /daily-reports/mine');
     const where: any = {};
     const d = needDay(q.date);
     if (d) where.reportDate = dayToDate(d);
-    if (me.role === 'COORDINATOR') where.teamId = me.teamId ?? '__none__'; // hard-scoped, ?teamId= is ignored
-    else if (q.teamId) where.teamId = q.teamId;
+
+    if (me.role === 'TEAM_LEAD' || me.role === 'COORDINATOR') {
+      if (!me.teamId) return [];
+      where.teamId = me.teamId;
+      if (q.employeeId) where.userId = q.employeeId;
+    } else if (me.role === 'ADMIN') {
+      if (q.teamId && q.teamId !== 'ALL') where.teamId = q.teamId;
+      if (q.employeeId && q.employeeId !== 'ALL') where.userId = q.employeeId;
+    }
+
     if (q.batchId) where.batchId = q.batchId;
+
     return this.prisma.dailyReport.findMany({
-      where, orderBy: { submittedAt: 'desc' }, take: 200,
-      include: { files: LIVE_FILES, user: { select: { id: true, displayName: true, email: true } } },
+      where,
+      orderBy: { submittedAt: 'desc' },
+      take: 200,
+      include: {
+        files: LIVE_FILES,
+        user: { select: { id: true, displayName: true, email: true, role: true, team: { select: { id: true, name: true } } } },
+        taskLinks: { include: { task: { select: { id: true, title: true, status: true } } } },
+      },
     });
   }
 
-  // Who submitted / who is missing — the coordinator follow-up view.
+  async getById(me: RequestUser, id: string) {
+    const report = await this.prisma.dailyReport.findUnique({
+      where: { id },
+      include: {
+        files: LIVE_FILES,
+        user: { select: { id: true, displayName: true, email: true, role: true, teamId: true, team: { select: { id: true, name: true } } } },
+        taskLinks: { include: { task: { select: { id: true, title: true, status: true, priority: true } } } },
+      },
+    });
+    if (!report) throw new NotFoundException('Daily report not found');
+
+    if (me.role === 'EMPLOYEE' && report.userId !== me.id) {
+      throw new ForbiddenException('Forbidden');
+    }
+    if ((me.role === 'TEAM_LEAD' || me.role === 'COORDINATOR') && me.teamId && report.teamId !== me.teamId && report.userId !== me.id) {
+      throw new ForbiddenException('Outside your team');
+    }
+
+    return report;
+  }
+
+  // Who submitted / who is missing — role-based visibility.
   async status(me: RequestUser, dateStr?: string, teamId?: string, batchId?: string) {
     if (!['ADMIN', 'TEAM_LEAD', 'COORDINATOR'].includes(me.role)) throw new ForbiddenException('Forbidden');
     const day = needDay(dateStr) ?? dayStr();
@@ -127,26 +163,52 @@ export class ReportsService {
     const working = await this.calendar.isWorkingDay(day);
 
     const scope: any = { isActive: true, role: { not: 'ADMIN' }, createdAt: { lt: dayRange(day).end } };
-    if (me.role === 'COORDINATOR') scope.teamId = me.teamId ?? '__none__';
-    else if (teamId) scope.teamId = teamId;
+    if (me.role === 'TEAM_LEAD' || me.role === 'COORDINATOR') {
+      if (!me.teamId) return { date: day, workingDay: working, total: 0, submittedCount: 0, missingCount: 0, submitted: [], missing: [] };
+      scope.teamId = me.teamId;
+    } else if (teamId && teamId !== 'ALL') {
+      scope.teamId = teamId;
+    }
     if (batchId) scope.batchId = batchId;
 
     const members = await this.prisma.user.findMany({
-      where: scope, select: { id: true, displayName: true, email: true, teamId: true }, orderBy: { displayName: 'asc' },
+      where: scope,
+      select: {
+        id: true,
+        displayName: true,
+        email: true,
+        role: true,
+        teamId: true,
+        team: { select: { id: true, name: true } },
+      },
+      orderBy: { displayName: 'asc' },
     });
-    const reports = await this.prisma.dailyReport.findMany({ where: { reportDate: date, userId: { in: members.map((m) => m.id) } } });
+
+    const reports = await this.prisma.dailyReport.findMany({
+      where: { reportDate: date, userId: { in: members.map((m) => m.id) } },
+      include: {
+        files: LIVE_FILES,
+        taskLinks: { include: { task: { select: { id: true, title: true, status: true } } } },
+      },
+    });
+
     const byUser = new Map(reports.map((r) => [r.userId, r]));
+    const submitted = members.filter((m) => byUser.has(m.id)).map((m) => ({ ...m, report: byUser.get(m.id) }));
+    const missing = working ? members.filter((m) => !byUser.has(m.id)) : [];
+
     return {
       date: day,
       workingDay: working,
-      submitted: members.filter((m) => byUser.has(m.id)).map((m) => ({ ...m, report: byUser.get(m.id) })),
-      // Nobody is "missing" on Sundays/holidays, or for people who only joined after that day.
-      missing: working ? members.filter((m) => !byUser.has(m.id)) : [],
+      total: members.length,
+      submittedCount: submitted.length,
+      missingCount: missing.length,
+      submitted,
+      missing,
     };
   }
 
-  // ---------- Evaluations (final batch report inputs) ----------
-  async upsertEvaluation(me: RequestUser, dto: UpsertEvaluationDto, ip?: string) {
+  // ---------- Evaluations ----------
+  async upsertEvaluation(me: RequestUser, dto: any, ip?: string) {
     if (!['ADMIN', 'TEAM_LEAD'].includes(me.role)) throw new ForbiddenException('Only leads/admins evaluate');
     const clamp = (v: number | undefined) => (v === undefined ? undefined : Math.min(100, Math.max(0, v)));
     const data = {

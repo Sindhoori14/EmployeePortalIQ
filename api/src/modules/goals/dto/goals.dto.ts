@@ -1,4 +1,4 @@
-import { IsDateString, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsDateString, IsIn, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 
 export class CreateGoalDto {
   @IsString()
@@ -12,8 +12,12 @@ export class CreateGoalDto {
   description?: string;
 
   @IsOptional()
-  @IsIn(['WEEKLY', 'MONTHLY', 'CUSTOM'])
-  type?: 'WEEKLY' | 'MONTHLY' | 'CUSTOM';
+  @IsIn(['WEEKLY', 'MONTHLY'])
+  type?: 'WEEKLY' | 'MONTHLY';
+
+  @IsOptional()
+  @IsIn(['INDIVIDUAL', 'TEAM', 'ALL_TEAMS', 'ALL_EMPLOYEES'])
+  targetScope?: 'INDIVIDUAL' | 'TEAM' | 'ALL_TEAMS' | 'ALL_EMPLOYEES';
 
   @IsOptional()
   @IsString()
@@ -22,6 +26,10 @@ export class CreateGoalDto {
   @IsOptional()
   @IsString()
   batchId?: string;
+
+  @IsOptional()
+  @IsString()
+  ownerId?: string;
 
   @IsOptional()
   @IsDateString()
@@ -45,6 +53,30 @@ export class UpdateGoalDto {
   description?: string;
 
   @IsOptional()
+  @IsIn(['WEEKLY', 'MONTHLY'])
+  type?: 'WEEKLY' | 'MONTHLY';
+
+  @IsOptional()
   @IsIn(['ACTIVE', 'DONE', 'ARCHIVED'])
   status?: 'ACTIVE' | 'DONE' | 'ARCHIVED';
+
+  @IsOptional()
+  @IsDateString()
+  startDate?: string;
+
+  @IsOptional()
+  @IsDateString()
+  endDate?: string;
+}
+
+export class UpdateGoalProgressDto {
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  progress!: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  note?: string;
 }

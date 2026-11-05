@@ -10,7 +10,6 @@ import { GoalsModule } from './modules/goals/goals.module';
 import { ProjectsModule } from './modules/projects/projects.module';
 import { TicketsModule } from './modules/tickets/tickets.module';
 import { TasksModule } from './modules/tasks/tasks.module';
-import { LearningModule } from './modules/learning/learning.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { InsightsModule } from './modules/insights/insights.module';
 import { CommsModule } from './modules/comms/comms.module';
@@ -40,7 +39,6 @@ import { WorkplaceModule } from './modules/workplace/workplace.module';
     ProjectsModule,
     TicketsModule,
     TasksModule,
-    LearningModule,
     ReportsModule,
     InsightsModule,
     CommsModule,

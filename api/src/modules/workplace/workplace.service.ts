@@ -5,7 +5,7 @@ import { NotificationsService } from '../comms/notifications.service';
 import { WorkCalendarService } from '../../common/work-calendar.service';
 import { RequestUser } from '../../common/decorators/current-user.decorator';
 import { dayStr, dayToDate, addDays } from '../../common/time';
-import { CreateMeetingDto, RequestLeaveDto } from './dto/workplace.dto';
+import { CreateMeetingDto, RequestLeaveDto, CreateCalendarEventDto, UpdateCalendarEventDto } from './dto/workplace.dto';
 
 const LEAD_ROLES = ['ADMIN', 'TEAM_LEAD'];
 
@@ -99,14 +99,28 @@ export class WorkplaceService {
     for (let d = from, n = 0; d <= to && n < 200; d = addDays(d, 1), n++) days++;
     if (days > 60) throw new BadRequestException('One request covers at most 60 days');
     const overlap = await this.prisma.leaveRequest.findFirst({
-      where: { userId: me.id, status: { in: ['PENDING', 'APPROVED'] }, fromDate: { lte: dayToDate(to) }, toDate: { gte: dayToDate(from) } },
+      where: { userId: me.id, status: { in: ['PENDING', 'TL_APPROVED', 'APPROVED'] }, fromDate: { lte: dayToDate(to) }, toDate: { gte: dayToDate(from) } },
       select: { id: true },
     });
-    if (overlap) throw new BadRequestException('You already have a pending/approved leave covering these dates');
+    if (overlap) throw new BadRequestException('You already have a pending or approved leave covering these dates');
+
+    // If applicant is a Team Lead or has no assigned team, route directly to Admin final review
+    const isLeadOrNoTeam = me.role === 'TEAM_LEAD' || !me.teamId;
+    const initialStatus = isLeadOrNoTeam ? 'TL_APPROVED' : 'PENDING';
+    const tlNote = isLeadOrNoTeam ? 'Direct to Admin review (No assigned TL / Team Lead applicant)' : null;
+
     const r = await this.prisma.leaveRequest.create({
-      data: { userId: me.id, teamId: me.teamId ?? null, fromDate: dayToDate(from), toDate: dayToDate(to), reason: dto.reason.trim(), status: 'PENDING' as any },
+      data: {
+        userId: me.id,
+        teamId: me.teamId ?? null,
+        fromDate: dayToDate(from),
+        toDate: dayToDate(to),
+        reason: dto.reason.trim(),
+        status: initialStatus as any,
+        tlNote,
+      },
     });
-    const pending = r;
+
     const staff = me.teamId
       ? await this.prisma.user.findMany({ where: { teamId: me.teamId, isActive: true, role: { in: ['TEAM_LEAD', 'COORDINATOR'] } }, select: { id: true } })
       : [];
@@ -114,48 +128,138 @@ export class WorkplaceService {
       type: 'REPORT_MISSING', title: `Leave request: ${me.id}`, body: `${from} → ${to}: ${dto.reason.trim().slice(0, 200)}`, link: '/leaves',
     });
     await this.audit.log({ actorId: me.id, action: 'LEAVE_REQUEST', entity: 'leave', entityId: r.id, ip });
-    return pending;
+    return r;
   }
 
   mine(me: RequestUser) {
     return this.prisma.leaveRequest.findMany({
-      where: { userId: me.id }, orderBy: { createdAt: 'desc' }, take: 100,
-      include: { decidedBy: { select: { id: true, displayName: true } } },
+      where: { userId: me.id },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+      include: {
+        tlDecidedBy: { select: { id: true, displayName: true } },
+        decidedBy: { select: { id: true, displayName: true } },
+        team: { select: { id: true, name: true } },
+      },
     });
   }
 
   async pending(me: RequestUser) {
     if (!['ADMIN', 'TEAM_LEAD', 'COORDINATOR'].includes(me.role)) throw new ForbiddenException('Forbidden');
-    const where: any = { status: 'PENDING' };
-    if (me.role !== 'ADMIN') {
+    const where: any = {};
+
+    if (me.role === 'TEAM_LEAD') {
       if (!me.teamId) return [];
       where.teamId = me.teamId;
+      where.status = 'PENDING';
+      where.userId = { not: me.id }; // Cannot review own leave
+    } else if (me.role === 'COORDINATOR') {
+      if (!me.teamId) return [];
+      where.teamId = me.teamId;
+      where.status = { in: ['PENDING', 'TL_APPROVED'] };
+    } else if (me.role === 'ADMIN') {
+      where.status = { in: ['TL_APPROVED', 'PENDING'] };
     }
+
     return this.prisma.leaveRequest.findMany({
-      where, orderBy: { createdAt: 'asc' }, take: 100,
-      include: { user: { select: { id: true, displayName: true, email: true } } },
+      where,
+      orderBy: { createdAt: 'asc' },
+      take: 100,
+      include: {
+        user: { select: { id: true, displayName: true, email: true, role: true } },
+        team: { select: { id: true, name: true } },
+        tlDecidedBy: { select: { id: true, displayName: true } },
+        decidedBy: { select: { id: true, displayName: true } },
+      },
     });
   }
 
   async decide(me: RequestUser, id: string, approve: boolean, note: string | undefined, ip?: string) {
-    if (!['ADMIN', 'TEAM_LEAD'].includes(me.role)) throw new ForbiddenException('Only leads/admins decide leaves');
+    if (!['ADMIN', 'TEAM_LEAD'].includes(me.role)) throw new ForbiddenException('Only leads and admins decide leaves');
     const r = await this.prisma.leaveRequest.findUnique({ where: { id } });
     if (!r) throw new NotFoundException('Leave not found');
-    if (r.status !== 'PENDING') throw new BadRequestException(`Already ${r.status.toLowerCase()}`);
-    if (me.role === 'TEAM_LEAD' && (!me.teamId || r.teamId !== me.teamId)) throw new ForbiddenException('Outside your team');
-    const status = approve ? 'APPROVED' : 'REJECTED';
-    const updated = await this.prisma.leaveRequest.update({
-      where: { id }, data: { status: status as any, decidedById: me.id, decidedAt: new Date() },
-    });
-    if (approve) await this.markOnLeave(r.userId, r.fromDate, r.toDate);
-    await this.notifications.notify([r.userId], {
-      type: 'REPORT_MISSING',
-      title: approve ? 'Leave approved' : 'Leave rejected',
-      body: `${this.fmt(r.fromDate)} → ${this.fmt(r.toDate)}${note ? `: ${note}` : ''}`,
-      link: '/leaves',
-    });
-    await this.audit.log({ actorId: me.id, action: approve ? 'LEAVE_APPROVE' : 'LEAVE_REJECT', entity: 'leave', entityId: id, ip });
-    return updated;
+
+    if (r.status !== 'PENDING' && r.status !== 'TL_APPROVED') {
+      throw new BadRequestException(`Leave request is already ${r.status.toLowerCase()}`);
+    }
+
+    // LEVEL 1: TEAM LEAD REVIEW
+    if (me.role === 'TEAM_LEAD') {
+      if (!me.teamId || r.teamId !== me.teamId) throw new ForbiddenException('Outside your team');
+      if (r.userId === me.id) throw new ForbiddenException('You cannot review your own leave request');
+      if (r.status !== 'PENDING') throw new BadRequestException('This request is no longer awaiting Team Lead review');
+
+      if (approve) {
+        const updated = await this.prisma.leaveRequest.update({
+          where: { id },
+          data: {
+            status: 'TL_APPROVED' as any,
+            tlDecidedById: me.id,
+            tlDecidedAt: new Date(),
+            tlNote: note?.trim() || 'Approved by Team Lead; queued for Admin final approval',
+          },
+        });
+        await this.audit.log({ actorId: me.id, action: 'LEAVE_TL_APPROVE', entity: 'leave', entityId: id, ip });
+        return updated;
+      } else {
+        const updated = await this.prisma.leaveRequest.update({
+          where: { id },
+          data: {
+            status: 'REJECTED' as any,
+            tlDecidedById: me.id,
+            tlDecidedAt: new Date(),
+            tlNote: note?.trim() || 'Rejected by Team Lead',
+            decidedById: me.id,
+            decidedAt: new Date(),
+          },
+        });
+        await this.notifications.notify([r.userId], {
+          type: 'REPORT_MISSING',
+          title: 'Leave request rejected by Team Lead',
+          body: `${this.fmt(r.fromDate)} → ${this.fmt(r.toDate)}${note ? `: ${note}` : ''}`,
+          link: '/leaves',
+        });
+        await this.audit.log({ actorId: me.id, action: 'LEAVE_TL_REJECT', entity: 'leave', entityId: id, ip });
+        return updated;
+      }
+    }
+
+    // LEVEL 2: ADMIN FINAL REVIEW
+    if (me.role === 'ADMIN') {
+      const finalStatus = approve ? 'APPROVED' : 'REJECTED';
+      const updated = await this.prisma.leaveRequest.update({
+        where: { id },
+        data: {
+          status: finalStatus as any,
+          adminNote: note?.trim() || null,
+          decidedById: me.id,
+          decidedAt: new Date(),
+        },
+      });
+
+      if (approve) {
+        await this.markOnLeave(r.userId, r.fromDate, r.toDate);
+      }
+
+      await this.notifications.notify([r.userId], {
+        type: 'REPORT_MISSING',
+        title: approve ? 'Leave approved (Admin Final Approval)' : 'Leave rejected by Administrator',
+        body: `${this.fmt(r.fromDate)} → ${this.fmt(r.toDate)}${note ? `: ${note}` : ''}`,
+        link: '/leaves',
+      });
+
+      await this.audit.log({
+        actorId: me.id,
+        action: approve ? 'LEAVE_ADMIN_APPROVE' : 'LEAVE_ADMIN_REJECT',
+        entity: 'leave',
+        entityId: id,
+        ip,
+      });
+
+      return updated;
+    }
+
+    throw new ForbiddenException('Forbidden');
   }
 
   async cancel(me: RequestUser, id: string, ip?: string) {
@@ -221,7 +325,25 @@ export class WorkplaceService {
     } else if (me.role === 'COORDINATOR') {
       taskWhere.teamId = me.teamId ?? '__none__';
     }
-    const [meetings, tasks, leaves, holidays] = await Promise.all([
+    const eventWhere: any = {
+      startDate: { lt: nextMonth },
+      endDate: { gte: monthStart },
+    };
+    if (me.role !== 'ADMIN') {
+      eventWhere.OR = [
+        { audience: { in: ['ALL_EMPLOYEES', 'ALL_TEAMS'] } },
+        ...(me.teamId ? [{ audience: 'SPECIFIC_TEAM', teamId: me.teamId }] : []),
+      ];
+    }
+    const [events, meetings, tasks, leaves, holidays] = await Promise.all([
+      (this.prisma as any).calendarEvent.findMany({
+        where: eventWhere,
+        orderBy: [{ startDate: 'asc' }, { startTime: 'asc' }],
+        include: {
+          team: { select: { id: true, name: true } },
+          createdBy: { select: { id: true, displayName: true } },
+        },
+      }),
       this.prisma.meeting.findMany({
         where: {
           recurrence: 'NONE',
@@ -253,23 +375,254 @@ export class WorkplaceService {
       }),
       this.calendar.holidaySet(),
     ]);
-    const days: Record<string, { meetings: unknown[]; tasks: unknown[]; leaves: unknown[]; isHoliday: boolean; isWorkingDay: boolean }> = {};
+    const days: Record<string, { events: unknown[]; meetings: unknown[]; tasks: unknown[]; leaves: unknown[]; isHoliday: boolean; isWorkingDay: boolean }> = {};
     const dayList: string[] = [];
     for (let d = new Date(monthStart); d < nextMonth; d = new Date(d.getTime() + 86_400_000)) {
       dayList.push(d.toISOString().slice(0, 10));
     }
     for (const d of dayList) {
+      const dayEvents = (events as any[]).filter((e) => this.fmt(e.startDate) <= d && d <= this.fmt(e.endDate));
+      const hasHolidayEvent = dayEvents.some((e) => e.type === 'HOLIDAY');
+      const isHol = holidays.has(d) || hasHolidayEvent;
       days[d] = {
+        events: dayEvents.map((e) => ({
+          id: e.id,
+          type: e.type,
+          title: e.title,
+          description: e.description,
+          startDate: this.fmt(e.startDate),
+          endDate: this.fmt(e.endDate),
+          startTime: e.startTime,
+          endTime: e.endTime,
+          meetUrl: e.meetUrl,
+          audience: e.audience,
+          team: e.team,
+          createdBy: e.createdBy,
+        })),
         meetings: meetings.filter((m) => m.startsAt.toISOString().slice(0, 10) === d).map((m) => ({ id: m.id, title: m.title, startsAt: m.startsAt, meetUrl: m.meetUrl, team: m.team })),
         tasks: tasks.filter((t) => t.dueDate && this.fmt(t.dueDate) === d),
         leaves: leaves
           .filter((l) => this.fmt(l.fromDate) <= d && d <= this.fmt(l.toDate))
           .map((l) => ({ user: l.user.displayName, fromDate: this.fmt(l.fromDate), toDate: this.fmt(l.toDate) })),
-        isHoliday: holidays.has(d),
-        isWorkingDay: await this.calendar.isWorkingDay(d),
+        isHoliday: isHol,
+        isWorkingDay: isHol ? false : await this.calendar.isWorkingDay(d),
       };
     }
     return { month, days };
+  }
+
+  // ---------------- Calendar Events (CR4) ----------------
+  async createCalendarEvent(me: RequestUser, dto: CreateCalendarEventDto, ip?: string) {
+    if (!['ADMIN', 'TEAM_LEAD'].includes(me.role)) {
+      throw new ForbiddenException('Only administrators and team leads can create calendar events');
+    }
+
+    const type = dto.type || 'MEETING';
+    const audience = dto.audience || 'ALL_EMPLOYEES';
+    let teamId = dto.teamId ?? null;
+
+    if (me.role === 'TEAM_LEAD') {
+      if (!me.teamId) throw new ForbiddenException('You are not assigned to any team');
+      teamId = me.teamId;
+      if (audience !== 'SPECIFIC_TEAM') {
+        throw new ForbiddenException('Team leads can only create events for their specific team');
+      }
+    } else if (me.role === 'ADMIN') {
+      if (audience === 'SPECIFIC_TEAM' && !teamId) {
+        throw new BadRequestException('A specific team must be selected when audience is Specific Team');
+      }
+      if (audience !== 'SPECIFIC_TEAM') {
+        teamId = null;
+      }
+    }
+
+    if (dto.meetUrl && !isHttpUrl(dto.meetUrl)) {
+      throw new BadRequestException('meetUrl must be a valid http(s) link');
+    }
+
+    const start = dayToDate(dto.startDate);
+    const end = dayToDate(dto.endDate);
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      throw new BadRequestException('Invalid start or end date');
+    }
+    if (dto.startDate > dto.endDate) {
+      throw new BadRequestException('End date cannot be earlier than start date');
+    }
+
+    const event = await (this.prisma as any).calendarEvent.create({
+      data: {
+        type: type as any,
+        title: dto.title.trim(),
+        description: dto.description?.trim() || null,
+        startDate: start,
+        endDate: end,
+        startTime: dto.startTime?.trim() || null,
+        endTime: dto.endTime?.trim() || null,
+        meetUrl: dto.meetUrl?.trim() || null,
+        audience: audience as any,
+        teamId,
+        createdById: me.id,
+      },
+      include: {
+        team: { select: { id: true, name: true } },
+        createdBy: { select: { id: true, displayName: true, email: true } },
+      },
+    });
+
+    await this.audit.log({
+      actorId: me.id,
+      action: 'CALENDAR_EVENT_CREATE',
+      entity: 'calendar_event',
+      entityId: event.id,
+      ip,
+    });
+
+    return event;
+  }
+
+  async updateCalendarEvent(me: RequestUser, id: string, dto: UpdateCalendarEventDto, ip?: string) {
+    if (!['ADMIN', 'TEAM_LEAD'].includes(me.role)) {
+      throw new ForbiddenException('Forbidden');
+    }
+
+    const existing = await (this.prisma as any).calendarEvent.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Calendar event not found');
+
+    if (me.role === 'TEAM_LEAD') {
+      if (!me.teamId || existing.teamId !== me.teamId) {
+        throw new ForbiddenException('Outside your team');
+      }
+    }
+
+    const data: any = {};
+    if (dto.type) data.type = dto.type;
+    if (dto.title !== undefined) data.title = dto.title.trim();
+    if (dto.description !== undefined) data.description = dto.description?.trim() || null;
+    if (dto.startDate) data.startDate = dayToDate(dto.startDate);
+    if (dto.endDate) data.endDate = dayToDate(dto.endDate);
+    if (dto.startTime !== undefined) data.startTime = dto.startTime?.trim() || null;
+    if (dto.endTime !== undefined) data.endTime = dto.endTime?.trim() || null;
+    if (dto.meetUrl !== undefined) {
+      if (dto.meetUrl && !isHttpUrl(dto.meetUrl)) throw new BadRequestException('meetUrl must be a valid http(s) link');
+      data.meetUrl = dto.meetUrl?.trim() || null;
+    }
+    if (dto.audience) {
+      data.audience = dto.audience;
+      if (dto.audience === 'SPECIFIC_TEAM') {
+        data.teamId = dto.teamId ?? existing.teamId;
+      } else {
+        data.teamId = null;
+      }
+    } else if (dto.teamId !== undefined) {
+      data.teamId = dto.teamId;
+    }
+
+    const updated = await (this.prisma as any).calendarEvent.update({
+      where: { id },
+      data,
+      include: {
+        team: { select: { id: true, name: true } },
+        createdBy: { select: { id: true, displayName: true, email: true } },
+      },
+    });
+
+    await this.audit.log({
+      actorId: me.id,
+      action: 'CALENDAR_EVENT_UPDATE',
+      entity: 'calendar_event',
+      entityId: id,
+      ip,
+    });
+
+    return updated;
+  }
+
+  async deleteCalendarEvent(me: RequestUser, id: string, ip?: string) {
+    if (!['ADMIN', 'TEAM_LEAD'].includes(me.role)) {
+      throw new ForbiddenException('Forbidden');
+    }
+
+    const existing = await (this.prisma as any).calendarEvent.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Calendar event not found');
+
+    if (me.role === 'TEAM_LEAD') {
+      if (!me.teamId || existing.teamId !== me.teamId) {
+        throw new ForbiddenException('Outside your team');
+      }
+    }
+
+    await (this.prisma as any).calendarEvent.delete({ where: { id } });
+    await this.audit.log({
+      actorId: me.id,
+      action: 'CALENDAR_EVENT_DELETE',
+      entity: 'calendar_event',
+      entityId: id,
+      ip,
+    });
+
+    return { success: true };
+  }
+
+  async listCalendarEvents(me: RequestUser, query?: { month?: string; type?: string; teamId?: string }) {
+    const where: any = {};
+    if (query?.type) where.type = query.type;
+
+    if (query?.month && /^\d{4}-(0[1-9]|1[0-2])$/.test(query.month)) {
+      const start = new Date(`${query.month}-01T00:00:00Z`);
+      const next = new Date(start);
+      next.setUTCMonth(next.getUTCMonth() + 1);
+      where.startDate = { lt: next };
+      where.endDate = { gte: start };
+    }
+
+    if (me.role === 'ADMIN') {
+      if (query?.teamId) {
+        where.OR = [
+          { audience: { in: ['ALL_EMPLOYEES', 'ALL_TEAMS'] } },
+          { teamId: query.teamId },
+        ];
+      }
+    } else {
+      where.OR = [
+        { audience: { in: ['ALL_EMPLOYEES', 'ALL_TEAMS'] } },
+        ...(me.teamId ? [{ audience: 'SPECIFIC_TEAM', teamId: me.teamId }] : []),
+      ];
+    }
+
+    return (this.prisma as any).calendarEvent.findMany({
+      where,
+      orderBy: [{ startDate: 'asc' }, { startTime: 'asc' }],
+      include: {
+        team: { select: { id: true, name: true } },
+        createdBy: { select: { id: true, displayName: true, email: true } },
+      },
+    });
+  }
+
+  // ---------------- Leave History (CR3) ----------------
+  async history(me: RequestUser, query?: { teamId?: string; status?: string; limit?: number }) {
+    if (!['ADMIN', 'TEAM_LEAD', 'COORDINATOR'].includes(me.role)) throw new ForbiddenException('Forbidden');
+    const where: any = {};
+    if (me.role === 'TEAM_LEAD' || me.role === 'COORDINATOR') {
+      if (!me.teamId) return [];
+      where.teamId = me.teamId;
+    } else if (me.role === 'ADMIN') {
+      if (query?.teamId) where.teamId = query.teamId;
+    }
+    if (query?.status) {
+      where.status = query.status;
+    }
+    return this.prisma.leaveRequest.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: query?.limit ? Number(query.limit) : 100,
+      include: {
+        user: { select: { id: true, displayName: true, email: true, role: true } },
+        team: { select: { id: true, name: true } },
+        tlDecidedBy: { select: { id: true, displayName: true } },
+        decidedBy: { select: { id: true, displayName: true } },
+      },
+    });
   }
 
   private canSeeMeeting(me: RequestUser, teamId: string | null): boolean {

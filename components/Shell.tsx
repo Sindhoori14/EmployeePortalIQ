@@ -15,8 +15,6 @@ const ICONS: Record<string, string> = {
   dashboard: 'M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z',
   tasks: 'M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11',
   goals: 'M12 22a10 10 0 100-20 10 10 0 000 20zm0-6a4 4 0 100-8 4 4 0 000 8zm0-2a2 2 0 100-4 2 2 0 000 4z',
-  training: 'M22 10L12 5 2 10l10 5 10-5zM6 12v5c3 2 9 2 12 0v-5',
-  assessments: 'M9 12h6M9 16h6M9 8h6M5 3h14a1 1 0 011 1v16a1 1 0 01-1 1H5a1 1 0 01-1-1V4a1 1 0 011-1z',
   reports: 'M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9l-6-6zM14 3v6h6M8 13h8M8 17h5',
   chat: 'M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z',
   announce: 'M3 11v2a1 1 0 001 1h3l5 4V6L7 10H4a1 1 0 00-1 1zm13-3a5 5 0 010 8',
@@ -42,10 +40,6 @@ const GROUPS: { title: string; items: { href: string; label: string; icon: strin
     { href: '/reports', label: 'Daily reports', icon: 'reports', roles: ALL },
     { href: '/leaves', label: 'Leaves', icon: 'leave', roles: ALL },
     { href: '/calendar', label: 'Calendar', icon: 'calendar', roles: ALL },
-  ] },
-  { title: 'Learning', items: [
-    { href: '/training', label: 'Training', icon: 'training', roles: ALL },
-    { href: '/assessments', label: 'Assessments', icon: 'assessments', roles: ALL },
   ] },
   { title: 'Communicate', items: [
     { href: '/channels', label: 'Workspace', icon: 'chat', roles: ALL },

@@ -178,6 +178,7 @@ model User {
 
   announcementsCreated Announcement[]   @relation("AnnouncementCreator")
   goalsCreated         Goal[]           @relation("GoalCreator")
+  goalsOwned           Goal[]           @relation("GoalOwner")
   assessmentsCreated   Assessment[]     @relation("AssessmentCreator")
   trainingPlansCreated TrainingPlan[]   @relation("TrainingPlanCreator")
   channelsCreated      Channel[]        @relation("ChannelCreator")
@@ -186,6 +187,8 @@ model User {
   meetingNotesEdited   Meeting[]        @relation("MeetingNoteEditor")
   leavesOwned          LeaveRequest[]   @relation("LeaveOwner")
   leavesDecided        LeaveRequest[]   @relation("LeaveDecider")
+  leavesTLDecided      LeaveRequest[]   @relation("LeaveTLDecider")
+  eventsCreated        CalendarEvent[]  @relation("EventCreator")
   requestedTickets     Ticket[]         @relation("TicketRequester")
   assignedTickets      Ticket[]         @relation("TicketAssignee")
   resolvedTickets      Ticket[]         @relation("TicketResolver")
@@ -228,6 +231,7 @@ model Team {
   announcements Announcement[]
   channels      Channel[]
   meetings      Meeting[]
+  calendarEvents CalendarEvent[]
   leaveRequests LeaveRequest[]
   tickets       Ticket[]
 
@@ -356,6 +360,8 @@ model Goal {
   status      GoalStatus @default(ACTIVE)
   teamId      String?
   batchId     String?
+  ownerId     String?
+  progress    Int        @default(0)
   startDate   DateTime?  @db.Date
   endDate     DateTime?  @db.Date
   createdById String
@@ -365,11 +371,13 @@ model Goal {
   team      Team?  @relation(fields: [teamId], references: [id], onDelete: SetNull)
   batch     Batch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
   createdBy User   @relation("GoalCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  owner     User?  @relation("GoalOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   tasks     Task[]
 
   @@index([teamId, status])
   @@index([batchId, status])
   @@index([createdById])
+  @@index([ownerId])
   @@map("goals")
 }
 
@@ -848,6 +856,7 @@ enum FileContext {
 
 enum LeaveStatus {
   PENDING
+  TL_APPROVED
   APPROVED
   REJECTED
   CANCELLED
@@ -880,21 +889,26 @@ model Meeting {
 
 /// Leave request for everyone. Approved days are marked ON_LEAVE on the attendance record.
 model LeaveRequest {
-  id          String      @id @default(cuid())
-  userId      String
-  teamId      String?
-  fromDate    DateTime    @db.Date
-  toDate      DateTime    @db.Date
-  reason      String      @db.VarChar(1000)
-  status      LeaveStatus @default(PENDING)
-  decidedById String?
-  decidedAt   DateTime?   @db.Timestamptz(6)
-  createdAt   DateTime    @default(now()) @db.Timestamptz(6)
-  updatedAt   DateTime    @updatedAt @db.Timestamptz(6)
+  id             String      @id @default(cuid())
+  userId         String
+  teamId         String?
+  fromDate       DateTime    @db.Date
+  toDate         DateTime    @db.Date
+  reason         String      @db.VarChar(1000)
+  status         LeaveStatus @default(PENDING)
+  tlDecidedById  String?
+  tlDecidedAt    DateTime?   @db.Timestamptz(6)
+  tlNote         String?     @db.VarChar(500)
+  decidedById    String?
+  decidedAt      DateTime?   @db.Timestamptz(6)
+  adminNote      String?     @db.VarChar(500)
+  createdAt      DateTime    @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime    @updatedAt @db.Timestamptz(6)
 
-  user      User  @relation("LeaveOwner", fields: [userId], references: [id], onDelete: Cascade)
-  team      Team? @relation(fields: [teamId], references: [id], onDelete: SetNull)
-  decidedBy User? @relation("LeaveDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  user        User  @relation("LeaveOwner", fields: [userId], references: [id], onDelete: Cascade)
+  team        Team? @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  decidedBy   User? @relation("LeaveDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  tlDecidedBy User? @relation("LeaveTLDecider", fields: [tlDecidedById], references: [id], onDelete: SetNull)
 
   @@index([userId, status])
   @@index([teamId, status])
@@ -1004,3 +1018,44 @@ model ChannelRead {
   @@id([userId, channelId])
   @@map("channel_reads")
 }
+
+// ---------- Calendar Management (CR4) ----------
+
+enum CalendarEventType {
+  MEETING
+  HOLIDAY
+  ANNOUNCEMENT
+  OTHER
+}
+
+enum CalendarAudience {
+  ALL_EMPLOYEES
+  ALL_TEAMS
+  SPECIFIC_TEAM
+}
+
+model CalendarEvent {
+  id          String            @id @default(cuid())
+  type        CalendarEventType @default(MEETING)
+  title       String            @db.VarChar(200)
+  description String?           @db.Text
+  startDate   DateTime          @db.Date
+  endDate     DateTime          @db.Date
+  startTime   String?           @db.VarChar(10)
+  endTime     String?           @db.VarChar(10)
+  meetUrl     String?           @db.VarChar(2000)
+  audience    CalendarAudience  @default(ALL_EMPLOYEES)
+  teamId      String?
+  createdById String
+  createdAt   DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime          @updatedAt @db.Timestamptz(6)
+
+  team      Team? @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  createdBy User  @relation("EventCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([startDate, endDate])
+  @@index([teamId])
+  @@index([type])
+  @@map("calendar_events")
+}
+

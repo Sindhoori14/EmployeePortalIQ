@@ -3,7 +3,7 @@ import type { Request } from 'express';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser, RequestUser } from '../../common/decorators/current-user.decorator';
 import { WorkplaceService } from './workplace.service';
-import { CreateMeetingDto, DecideLeaveDto, RequestLeaveDto, UpdateMeetingNoteDto } from './dto/workplace.dto';
+import { CreateMeetingDto, DecideLeaveDto, RequestLeaveDto, UpdateMeetingNoteDto, CreateCalendarEventDto, UpdateCalendarEventDto } from './dto/workplace.dto';
 
 @Controller()
 export class WorkplaceController {
@@ -40,6 +40,30 @@ export class WorkplaceController {
     return this.work.monthView(me, month);
   }
 
+  // ----- calendar events (CR4) -----
+  @Roles('ADMIN', 'TEAM_LEAD')
+  @Post('calendar/events')
+  createEvent(@CurrentUser() me: RequestUser, @Body() dto: CreateCalendarEventDto, @Req() req: Request) {
+    return this.work.createCalendarEvent(me, dto, this.ip(req));
+  }
+
+  @Roles('ADMIN', 'TEAM_LEAD')
+  @Patch('calendar/events/:id')
+  updateEvent(@CurrentUser() me: RequestUser, @Param('id') id: string, @Body() dto: UpdateCalendarEventDto, @Req() req: Request) {
+    return this.work.updateCalendarEvent(me, id, dto, this.ip(req));
+  }
+
+  @Roles('ADMIN', 'TEAM_LEAD')
+  @Delete('calendar/events/:id')
+  deleteEvent(@CurrentUser() me: RequestUser, @Param('id') id: string, @Req() req: Request) {
+    return this.work.deleteCalendarEvent(me, id, this.ip(req));
+  }
+
+  @Get('calendar/events')
+  listEvents(@CurrentUser() me: RequestUser, @Query('month') month?: string, @Query('type') type?: string, @Query('teamId') teamId?: string) {
+    return this.work.listCalendarEvents(me, { month, type, teamId });
+  }
+
   // ----- leaves (everyone) -----
   @Post('leaves')
   request(@CurrentUser() me: RequestUser, @Body() dto: RequestLeaveDto, @Req() req: Request) {
@@ -55,6 +79,12 @@ export class WorkplaceController {
   @Get('leaves/pending')
   pending(@CurrentUser() me: RequestUser) {
     return this.work.pending(me);
+  }
+
+  @Roles('ADMIN', 'TEAM_LEAD', 'COORDINATOR')
+  @Get('leaves/history')
+  history(@CurrentUser() me: RequestUser, @Query('teamId') teamId?: string, @Query('status') status?: string, @Query('limit') limit?: string) {
+    return this.work.history(me, { teamId, status, limit: limit ? Number(limit) : undefined });
   }
 
   @Roles('ADMIN', 'TEAM_LEAD', 'COORDINATOR')

@@ -15,8 +15,6 @@ const PAGES: { href: string; label: string; roles?: string[]; keys: string }[] =
   { href: '/profile', label: 'My profile & photo', keys: 'picture avatar photo' },
   { href: '/reports', label: 'Daily report', keys: 'submit update standup' },
   { href: '/goals', label: 'Goals', keys: 'okr weekly' },
-  { href: '/training', label: 'Training', keys: 'learn course days' },
-  { href: '/assessments', label: 'Assessments', keys: 'quiz test exam' },
   { href: '/channels', label: 'Workspace', keys: 'message channel talk' },
   { href: '/announcements', label: 'Announcements', keys: 'news notice' },
   { href: '/teams', label: 'Teams', roles: ['ADMIN', 'TEAM_LEAD', 'COORDINATOR'], keys: 'group' },

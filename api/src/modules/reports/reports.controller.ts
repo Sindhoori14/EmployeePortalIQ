@@ -3,7 +3,7 @@ import type { Request } from 'express';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser, RequestUser } from '../../common/decorators/current-user.decorator';
 import { ReportsService } from './reports.service';
-import { SubmitReportDto, UpsertEvaluationDto } from '../learning/dto/learning.dto';
+import { SubmitReportDto } from './dto/reports.dto';
 
 @Controller()
 export class ReportsController {
@@ -36,26 +36,20 @@ export class ReportsController {
 
   @Roles('ADMIN', 'TEAM_LEAD', 'COORDINATOR')
   @Get('daily-reports')
-  list(@CurrentUser() me: RequestUser, @Query('date') date?: string, @Query('teamId') teamId?: string, @Query('batchId') batchId?: string) {
-    return this.reports.list(me, { date, teamId, batchId });
+  list(
+    @CurrentUser() me: RequestUser,
+    @Query('date') date?: string,
+    @Query('teamId') teamId?: string,
+    @Query('employeeId') employeeId?: string,
+    @Query('batchId') batchId?: string,
+  ) {
+    return this.reports.list(me, { date, teamId, employeeId, batchId });
   }
 
-  @Roles('ADMIN', 'TEAM_LEAD')
-  @Put('batch-evaluations')
-  evaluate(@CurrentUser() me: RequestUser, @Body() dto: UpsertEvaluationDto, @Req() req: Request) {
-    return this.reports.upsertEvaluation(me, dto, this.ip(req));
-  }
-
-  @Roles('ADMIN', 'TEAM_LEAD')
-  @Post('batch-evaluations/compute')
-  compute(@CurrentUser() me: RequestUser, @Body() body: { batchId: string }, @Req() req: Request) {
-    return this.reports.computeEvaluations(me, String(body?.batchId ?? ''), this.ip(req));
-  }
-
-  @Roles('ADMIN', 'TEAM_LEAD', 'COORDINATOR')
-  @Get('batch-evaluations')
-  evaluations(@CurrentUser() me: RequestUser, @Query('batchId') batchId: string) {
-    return this.reports.listEvaluations(me, batchId);
+  @Roles('ADMIN', 'TEAM_LEAD', 'COORDINATOR', 'EMPLOYEE')
+  @Get('daily-reports/:id')
+  getById(@CurrentUser() me: RequestUser, @Param('id') id: string) {
+    return this.reports.getById(me, id);
   }
 
   @Get('settings')

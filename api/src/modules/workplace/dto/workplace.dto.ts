@@ -46,7 +46,8 @@ export class UpdateMeetingNoteDto {
   note!: string;
 }
 
-export class DecideLeaveDto {  @IsOptional()
+export class DecideLeaveDto {
+  @IsOptional()
   @IsIn(['APPROVED', 'REJECTED'])
   decision?: 'APPROVED' | 'REJECTED';
 
@@ -54,4 +55,97 @@ export class DecideLeaveDto {  @IsOptional()
   @IsString()
   @MaxLength(500)
   note?: string;
+}
+
+export class CreateCalendarEventDto {
+  @IsOptional()
+  @IsIn(['MEETING', 'HOLIDAY', 'ANNOUNCEMENT', 'OTHER'])
+  type?: 'MEETING' | 'HOLIDAY' | 'ANNOUNCEMENT' | 'OTHER';
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  title!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  description?: string;
+
+  @IsDateString()
+  startDate!: string;
+
+  @IsDateString()
+  endDate!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10)
+  startTime?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10)
+  endTime?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  meetUrl?: string;
+
+  @IsOptional()
+  @IsIn(['ALL_EMPLOYEES', 'ALL_TEAMS', 'SPECIFIC_TEAM'])
+  audience?: 'ALL_EMPLOYEES' | 'ALL_TEAMS' | 'SPECIFIC_TEAM';
+
+  @IsOptional()
+  @IsString()
+  teamId?: string | null;
+}
+
+export class UpdateCalendarEventDto {
+  @IsOptional()
+  @IsIn(['MEETING', 'HOLIDAY', 'ANNOUNCEMENT', 'OTHER'])
+  type?: 'MEETING' | 'HOLIDAY' | 'ANNOUNCEMENT' | 'OTHER';
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  title?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  description?: string;
+
+  @IsOptional()
+  @IsDateString()
+  startDate?: string;
+
+  @IsOptional()
+  @IsDateString()
+  endDate?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10)
+  startTime?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10)
+  endTime?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  meetUrl?: string;
+
+  @IsOptional()
+  @IsIn(['ALL_EMPLOYEES', 'ALL_TEAMS', 'SPECIFIC_TEAM'])
+  audience?: 'ALL_EMPLOYEES' | 'ALL_TEAMS' | 'SPECIFIC_TEAM';
+
+  @IsOptional()
+  @IsString()
+  teamId?: string | null;
 }
