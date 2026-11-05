@@ -4,15 +4,35 @@ import { api, ApiError, fmtDate } from '../../lib/api';
 import { useRequireAuth } from '../../lib/auth-context';
 import { Avatar, Empty, Loading, Modal, PageHeader, ProgressBar } from '../../components/ui';
 
+interface ChildGoal {
+  id: string;
+  title: string;
+  description: string | null;
+  type: 'WEEKLY' | 'MONTHLY';
+  status: 'ACTIVE' | 'DONE' | 'ARCHIVED';
+  targetScope?: string | null;
+  teamId: string | null;
+  ownerId: string | null;
+  parentGoalId: string | null;
+  progress: number;
+  startDate: string | null;
+  endDate: string | null;
+  createdAt?: string;
+  owner?: { id: string; displayName: string; email?: string; role?: string } | null;
+  team?: { id: string; name: string } | null;
+}
+
 interface Goal {
   id: string;
   title: string;
   description: string | null;
   type: 'WEEKLY' | 'MONTHLY';
   status: 'ACTIVE' | 'DONE' | 'ARCHIVED';
+  targetScope?: string | null;
   teamId: string | null;
   batchId: string | null;
   ownerId: string | null;
+  parentGoalId: string | null;
   progress: number;
   startDate: string | null;
   endDate: string | null;
@@ -20,6 +40,7 @@ interface Goal {
   owner?: { id: string; displayName: string; email?: string; role?: string } | null;
   team?: { id: string; name: string } | null;
   createdBy?: { id: string; displayName: string } | null;
+  childGoals?: ChildGoal[];
 }
 
 interface TeamOption {
@@ -51,6 +72,12 @@ export default function GoalsPage() {
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState('');
 
+  // Grouped expansion state
+  const [expandedGoals, setExpandedGoals] = useState<Record<string, boolean>>({});
+  const toggleExpand = (id: string) => {
+    setExpandedGoals((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
   // Filters
   const [search, setSearch] = useState('');
   const [periodFilter, setPeriodFilter] = useState<'ALL' | 'WEEKLY' | 'MONTHLY'>('ALL');
@@ -60,7 +87,7 @@ export default function GoalsPage() {
   // Modals
   const [createOpen, setCreateOpen] = useState(false);
   const [progressOpen, setProgressOpen] = useState(false);
-  const [selectedGoal, setSelectedGoal] = useState<Goal | null>(null);
+  const [selectedGoal, setSelectedGoal] = useState<Goal | ChildGoal | null>(null);
   const [progressVal, setProgressVal] = useState<number>(0);
   const [progressNote, setProgressNote] = useState('');
 
@@ -232,12 +259,18 @@ export default function GoalsPage() {
     }
   }
 
-  // Filtered list
+  // Filtered list with deep search across parent goals and child assignees
   const filteredGoals = useMemo(() => {
     return goals.filter((g) => {
       if (periodFilter !== 'ALL' && g.type !== periodFilter) return false;
       if (statusFilter !== 'ALL' && g.status !== statusFilter) return false;
-      if (teamFilter !== 'ALL' && g.teamId !== teamFilter) return false;
+      if (
+        teamFilter !== 'ALL' &&
+        g.teamId !== teamFilter &&
+        !g.childGoals?.some((c) => c.teamId === teamFilter)
+      ) {
+        return false;
+      }
 
       if (search.trim()) {
         const q = search.toLowerCase();
@@ -245,7 +278,13 @@ export default function GoalsPage() {
         const d = (g.description || '').toLowerCase();
         const o = (g.owner?.displayName || '').toLowerCase();
         const tm = (g.team?.name || '').toLowerCase();
-        if (!t.includes(q) && !d.includes(q) && !o.includes(q) && !tm.includes(q)) {
+        const matchesChild = g.childGoals?.some(
+          (c) =>
+            (c.owner?.displayName || '').toLowerCase().includes(q) ||
+            (c.owner?.email || '').toLowerCase().includes(q) ||
+            (c.team?.name || '').toLowerCase().includes(q)
+        );
+        if (!t.includes(q) && !d.includes(q) && !o.includes(q) && !tm.includes(q) && !matchesChild) {
           return false;
         }
       }
@@ -253,34 +292,62 @@ export default function GoalsPage() {
     });
   }, [goals, periodFilter, statusFilter, teamFilter, search]);
 
-  // Statistics
+  // Statistics clearly distinguishing unique goals from individual employee assignments
   const stats = useMemo(() => {
-    const active = goals.filter((g) => g.status === 'ACTIVE').length;
-    const done = goals.filter((g) => g.status === 'DONE').length;
-    const weekly = goals.filter((g) => g.type === 'WEEKLY').length;
-    const monthly = goals.filter((g) => g.type === 'MONTHLY').length;
-    return { active, done, weekly, monthly, total: goals.length };
+    const totalGoals = goals.length;
+    const activeGoals = goals.filter((g) => g.status === 'ACTIVE').length;
+    const doneGoals = goals.filter((g) => g.status === 'DONE').length;
+    const weeklyGoals = goals.filter((g) => g.type === 'WEEKLY').length;
+    const monthlyGoals = goals.filter((g) => g.type === 'MONTHLY').length;
+
+    let totalAssignments = 0;
+    let activeAssignments = 0;
+    let completedAssignments = 0;
+
+    goals.forEach((g) => {
+      if (g.childGoals && g.childGoals.length > 0) {
+        totalAssignments += g.childGoals.length;
+        activeAssignments += g.childGoals.filter((c) => c.status === 'ACTIVE').length;
+        completedAssignments += g.childGoals.filter((c) => c.status === 'DONE').length;
+      } else {
+        totalAssignments += 1;
+        if (g.status === 'ACTIVE') activeAssignments += 1;
+        if (g.status === 'DONE') completedAssignments += 1;
+      }
+    });
+
+    return {
+      totalGoals,
+      activeGoals,
+      doneGoals,
+      weeklyGoals,
+      monthlyGoals,
+      totalAssignments,
+      activeAssignments,
+      completedAssignments,
+    };
   }, [goals]);
 
   return (
     <div className="space-y-6">
+      {/* Prominent Page Header with + Create Goal button in children */}
       <PageHeader
         title="Goals & Targets"
-        subtitle="Manage weekly milestones, monthly targets, and track independent employee progress"
-        action={
-          canCreate ? (
-            <button
-              onClick={() => {
-                setErr('');
-                setCreateOpen(true);
-              }}
-              className="btn flex items-center gap-2"
-            >
-              <span>+</span> Create Goal
-            </button>
-          ) : undefined
-        }
-      />
+        sub="Manage weekly milestones, monthly targets, and track independent employee progress"
+      >
+        {canCreate && (
+          <button
+            onClick={() => {
+              setErr('');
+              setCreateOpen(true);
+            }}
+            className="rounded-lg bg-[#FF5500] px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-[#e04b00] transition flex items-center gap-1.5 cursor-pointer"
+          >
+            <span className="text-sm font-bold">+</span>
+            <span>Create Goal</span>
+          </button>
+        )}
+      </PageHeader>
 
       {/* Status Messages */}
       {err && (
@@ -296,26 +363,32 @@ export default function GoalsPage() {
         </div>
       )}
 
-      {/* KPI Stats */}
+      {/* KPI Stats clearly distinguishing unique goals and employee assignments */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div className="card border-l-4 border-l-blue-600 bg-gradient-to-br from-blue-50/40 to-white">
           <p className="text-xs font-semibold uppercase tracking-wider text-blue-700">Active Goals</p>
-          <p className="mt-2 text-3xl font-extrabold text-navy">{stats.active}</p>
+          <div className="mt-2 flex items-baseline gap-2">
+            <span className="text-3xl font-extrabold text-navy">{stats.activeGoals}</span>
+            <span className="text-xs text-slate-500 font-medium">({stats.activeAssignments} assignees)</span>
+          </div>
           <p className="mt-1 text-xs text-slate-500">In progress</p>
         </div>
         <div className="card border-l-4 border-l-emerald-600 bg-gradient-to-br from-emerald-50/40 to-white">
           <p className="text-xs font-semibold uppercase tracking-wider text-emerald-700">Completed (100%)</p>
-          <p className="mt-2 text-3xl font-extrabold text-navy">{stats.done}</p>
+          <div className="mt-2 flex items-baseline gap-2">
+            <span className="text-3xl font-extrabold text-navy">{stats.doneGoals}</span>
+            <span className="text-xs text-slate-500 font-medium">({stats.completedAssignments} assignees)</span>
+          </div>
           <p className="mt-1 text-xs text-slate-500">Achieved targets</p>
         </div>
         <div className="card border-l-4 border-l-sky-500 bg-gradient-to-br from-sky-50/40 to-white">
           <p className="text-xs font-semibold uppercase tracking-wider text-sky-700">Weekly Deliverables</p>
-          <p className="mt-2 text-3xl font-extrabold text-navy">{stats.weekly}</p>
+          <p className="mt-2 text-3xl font-extrabold text-navy">{stats.weeklyGoals}</p>
           <p className="mt-1 text-xs text-slate-500">Short-cycle goals</p>
         </div>
         <div className="card border-l-4 border-l-indigo-600 bg-gradient-to-br from-indigo-50/40 to-white">
           <p className="text-xs font-semibold uppercase tracking-wider text-indigo-700">Monthly Targets</p>
-          <p className="mt-2 text-3xl font-extrabold text-navy">{stats.monthly}</p>
+          <p className="mt-2 text-3xl font-extrabold text-navy">{stats.monthlyGoals}</p>
           <p className="mt-1 text-xs text-slate-500">Strategic milestones</p>
         </div>
       </div>
@@ -394,11 +467,10 @@ export default function GoalsPage() {
 
       {/* Main Goals List */}
       {fetching ? (
-        <Loading label="Loading goals and targets..." />
+        <Loading />
       ) : filteredGoals.length === 0 ? (
         <Empty
-          title="No goals found"
-          description={
+          text={
             search
               ? 'No goals match your search and filter criteria.'
               : 'There are no active goals assigned for this period. Click "+ Create Goal" to set a milestone.'
@@ -407,6 +479,8 @@ export default function GoalsPage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {filteredGoals.map((g) => {
+            const isGroup = Boolean(g.childGoals && g.childGoals.length > 0);
+            const isExpanded = Boolean(expandedGoals[g.id]);
             const isOwner = user?.id === g.ownerId;
             const canUpdateProgress = isOwner || (isLead && g.teamId === user?.teamId) || isAdmin;
             const canDelete = isAdmin || (isLead && g.teamId === user?.teamId);
@@ -414,12 +488,15 @@ export default function GoalsPage() {
             return (
               <div
                 key={g.id}
-                className="card flex flex-col justify-between border border-slate-200 transition hover:shadow-md"
+                className={`card flex flex-col justify-between border border-slate-200 transition hover:shadow-md ${
+                  isGroup && isExpanded ? 'md:col-span-2' : ''
+                }`}
               >
                 <div>
                   <div className="flex items-start justify-between gap-3">
                     <div className="space-y-1">
                       <div className="flex flex-wrap items-center gap-2">
+                        {/* Period Badge */}
                         <span
                           className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
                             g.type === 'WEEKLY'
@@ -429,6 +506,8 @@ export default function GoalsPage() {
                         >
                           {g.type}
                         </span>
+
+                        {/* Status Badge */}
                         <span
                           className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
                             g.status === 'DONE'
@@ -438,7 +517,30 @@ export default function GoalsPage() {
                         >
                           {g.status === 'DONE' ? '✓ Completed' : 'In Progress'}
                         </span>
+
+                        {/* Scope Badge */}
+                        {g.targetScope === 'ALL_TEAMS' && (
+                          <span className="rounded px-2 py-0.5 text-[10px] font-semibold bg-purple-100 text-purple-800 border border-purple-200">
+                            🏢 All Teams
+                          </span>
+                        )}
+                        {g.targetScope === 'ALL_EMPLOYEES' && (
+                          <span className="rounded px-2 py-0.5 text-[10px] font-semibold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                            👥 All Employees
+                          </span>
+                        )}
+                        {(g.targetScope === 'TEAM' || (isGroup && g.team)) && (
+                          <span className="rounded px-2 py-0.5 text-[10px] font-semibold bg-blue-100 text-blue-800 border border-blue-200">
+                            👥 Team: {g.team?.name || 'Assigned Team'}
+                          </span>
+                        )}
+                        {!isGroup && g.targetScope === 'INDIVIDUAL' && (
+                          <span className="rounded px-2 py-0.5 text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                            👤 Individual
+                          </span>
+                        )}
                       </div>
+
                       <h3 className="font-bold text-navy text-base mt-1">{g.title}</h3>
                     </div>
 
@@ -463,16 +565,38 @@ export default function GoalsPage() {
 
                   {/* Assignee & Dates */}
                   <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 text-xs">
-                    <div className="flex items-center gap-2">
-                      <Avatar name={g.owner?.displayName || 'Team Goal'} size="sm" />
-                      <div>
-                        <p className="font-semibold text-slate-800">
-                          {g.owner?.displayName || (g.team?.name ? `${g.team.name} Goal` : 'Organization')}
-                          {isOwner && <span className="ml-1 text-[10px] font-bold text-brand">(You)</span>}
-                        </p>
-                        <p className="text-[10px] text-slate-400">{g.team?.name || 'All Teams'}</p>
+                    {isGroup ? (
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-sm">🎯</span>
+                          <span className="font-semibold text-slate-800">
+                            Assigned to {g.childGoals!.length} employees
+                          </span>
+                        </div>
+
+                        {/* Expand / Collapse Button */}
+                        <button
+                          type="button"
+                          onClick={() => toggleExpand(g.id)}
+                          className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 hover:text-navy transition"
+                        >
+                          <span>{isExpanded ? '▴ Hide Assignees' : `▾ View Assignees (${g.childGoals!.length})`}</span>
+                        </button>
                       </div>
-                    </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <Avatar name={g.owner?.displayName || 'User'} size={28} />
+                        <div>
+                          <p className="font-semibold text-slate-800">
+                            {g.owner?.displayName || 'Unassigned'}
+                            {isOwner && <span className="ml-1 text-[10px] font-bold text-brand">(You)</span>}
+                          </p>
+                          <p className="text-[10px] text-slate-400">
+                            {g.owner?.role || 'EMPLOYEE'} {g.team?.name ? `· ${g.team.name}` : ''}
+                          </p>
+                        </div>
+                      </div>
+                    )}
 
                     <div className="text-right text-[11px] text-slate-500">
                       {g.endDate ? (
@@ -484,17 +608,19 @@ export default function GoalsPage() {
                   </div>
                 </div>
 
-                {/* Progress Bar & Update Button */}
+                {/* Progress Bar & Standalone Update Button */}
                 <div className="mt-4 border-t border-slate-100 pt-3">
                   <div className="mb-1.5 flex items-center justify-between text-xs font-semibold">
-                    <span className="text-slate-600">Progress</span>
+                    <span className="text-slate-600">
+                      {isGroup ? 'Overall Team Progress (Average)' : 'Progress'}
+                    </span>
                     <span className={g.progress === 100 ? 'text-emerald-700 font-bold' : 'text-blue-700 font-bold'}>
                       {g.progress}%
                     </span>
                   </div>
                   <ProgressBar pct={g.progress} tone={g.progress === 100 ? 'brand' : 'accent'} />
 
-                  {canUpdateProgress && (
+                  {!isGroup && canUpdateProgress && (
                     <div className="mt-3 flex justify-end">
                       <button
                         onClick={() => {
@@ -510,6 +636,85 @@ export default function GoalsPage() {
                     </div>
                   )}
                 </div>
+
+                {/* EXPANDED VIEW: Individual Employee Assignments */}
+                {isGroup && isExpanded && (
+                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/80 p-3.5 space-y-3 animate-fade">
+                    <div className="flex items-center justify-between text-xs font-bold text-slate-700">
+                      <span>Assigned Employees ({g.childGoals!.length})</span>
+                      <span className="text-[11px] text-slate-500 font-normal">Independent progress tracking</span>
+                    </div>
+
+                    <div className="space-y-2">
+                      {g.childGoals!.map((child) => {
+                        const isChildOwner = user?.id === child.ownerId;
+                        const canUpdateChild = isChildOwner || (isLead && child.teamId === user?.teamId) || isAdmin;
+
+                        return (
+                          <div
+                            key={child.id}
+                            className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg border p-2.5 bg-white transition ${
+                              isChildOwner ? 'border-brand/40 ring-1 ring-brand/20' : 'border-slate-200'
+                            }`}
+                          >
+                            {/* Employee info */}
+                            <div className="flex items-center gap-2.5 min-w-[200px]">
+                              <Avatar name={child.owner?.displayName || 'User'} size={30} />
+                              <div className="truncate">
+                                <p className="text-xs font-semibold text-slate-900 truncate">
+                                  {child.owner?.displayName || 'Unknown'}
+                                  {isChildOwner && <span className="ml-1 text-[10px] font-bold text-brand">(You)</span>}
+                                </p>
+                                <p className="text-[10px] text-slate-400 truncate">
+                                  {child.owner?.role || 'EMPLOYEE'} {child.team?.name ? `· ${child.team.name}` : ''}
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Independent Progress Bar & % */}
+                            <div className="flex-1 max-w-xs">
+                              <div className="mb-1 flex items-center justify-between text-[11px]">
+                                <span className="text-slate-500 font-medium">Progress</span>
+                                <span className={`font-bold ${child.progress === 100 ? 'text-emerald-700' : 'text-blue-700'}`}>
+                                  {child.progress}%
+                                </span>
+                              </div>
+                              <ProgressBar pct={child.progress} tone={child.progress === 100 ? 'brand' : 'accent'} />
+                            </div>
+
+                            {/* Status & Update Action */}
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span
+                                className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
+                                  child.status === 'DONE'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : 'bg-amber-100 text-amber-800'
+                                }`}
+                              >
+                                {child.status === 'DONE' ? '✓ Done' : 'Active'}
+                              </span>
+
+                              {canUpdateChild && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedGoal(child);
+                                    setProgressVal(child.progress);
+                                    setProgressNote('');
+                                    setProgressOpen(true);
+                                  }}
+                                  className="rounded border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 hover:text-navy transition shadow-2xs"
+                                >
+                                  Update
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
@@ -799,9 +1004,16 @@ export default function GoalsPage() {
         {selectedGoal && (
           <form onSubmit={handleUpdateProgress} className="space-y-4">
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 space-y-1">
-              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                {selectedGoal.type} GOAL
-              </span>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                  {selectedGoal.type} GOAL
+                </span>
+                {selectedGoal.owner && (
+                  <span className="text-xs font-semibold text-slate-700">
+                    Assignee: {selectedGoal.owner.displayName}
+                  </span>
+                )}
+              </div>
               <p className="font-bold text-navy text-sm">{selectedGoal.title}</p>
               {selectedGoal.description && (
                 <p className="text-xs text-slate-600 italic">"{selectedGoal.description}"</p>

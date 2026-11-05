@@ -542,7 +542,7 @@ export default function CalendarPage() {
           </div>
 
           {!selectedDate ? (
-            <Empty title="No date selected" sub="Click on any day in the calendar to view its schedule." />
+            <Empty text="No date selected. Click on any day in the calendar to view its schedule." />
           ) : (
             <div className="space-y-4">
               {/* Event Type Filter */}
@@ -717,6 +717,7 @@ export default function CalendarPage() {
       {/* Create / Edit Event Modal */}
       {modalOpen && (
         <Modal
+          open={modalOpen}
           title={editingEventId ? 'Edit Calendar Event' : 'Create New Calendar Event'}
           onClose={() => setModalOpen(false)}
         >

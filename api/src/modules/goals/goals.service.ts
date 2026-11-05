@@ -9,7 +9,9 @@ export class GoalsService {
   constructor(private prisma: PrismaService, private audit: AuditService) {}
 
   async list(me: RequestUser, query?: { teamId?: string; ownerId?: string; type?: string; status?: string }) {
-    const where: any = {};
+    const where: any = {
+      parentGoalId: null, // Always return root/grouped goals
+    };
 
     if (query?.type && query.type !== 'ALL') where.type = query.type;
     if (query?.status && query.status !== 'ALL') where.status = query.status;
@@ -17,7 +19,9 @@ export class GoalsService {
     if (me.role === 'EMPLOYEE') {
       where.OR = [
         { ownerId: me.id },
-        ...(me.teamId ? [{ teamId: me.teamId, ownerId: null }] : []),
+        { childGoals: { some: { ownerId: me.id } } },
+        ...(me.teamId ? [{ teamId: me.teamId, targetScope: 'TEAM' }] : []),
+        { targetScope: 'ALL_EMPLOYEES' },
       ];
     } else if (me.role === 'TEAM_LEAD' || me.role === 'COORDINATOR') {
       if (!me.teamId) return [];
@@ -25,14 +29,23 @@ export class GoalsService {
         { teamId: me.teamId },
         { ownerId: me.id },
         { createdById: me.id },
+        { targetScope: { in: ['ALL_TEAMS', 'ALL_EMPLOYEES'] } },
+        { childGoals: { some: { teamId: me.teamId } } },
       ];
-      if (query?.ownerId) where.ownerId = query.ownerId;
+      if (query?.teamId && query.teamId !== 'ALL') where.teamId = query.teamId;
+      if (query?.ownerId && query.ownerId !== 'ALL') {
+        where.OR = [{ ownerId: query.ownerId }, { childGoals: { some: { ownerId: query.ownerId } } }];
+      }
     } else if (me.role === 'ADMIN') {
-      if (query?.teamId) where.teamId = query.teamId;
-      if (query?.ownerId) where.ownerId = query.ownerId;
+      if (query?.teamId && query.teamId !== 'ALL') {
+        where.OR = [{ teamId: query.teamId }, { childGoals: { some: { teamId: query.teamId } } }];
+      }
+      if (query?.ownerId && query.ownerId !== 'ALL') {
+        where.OR = [{ ownerId: query.ownerId }, { childGoals: { some: { ownerId: query.ownerId } } }];
+      }
     }
 
-    return this.prisma.goal.findMany({
+    const goals = await this.prisma.goal.findMany({
       where,
       orderBy: [{ createdAt: 'desc' }],
       take: 200,
@@ -40,7 +53,29 @@ export class GoalsService {
         owner: { select: { id: true, displayName: true, email: true, role: true } },
         team: { select: { id: true, name: true } },
         createdBy: { select: { id: true, displayName: true } },
+        childGoals: {
+          include: {
+            owner: { select: { id: true, displayName: true, email: true, role: true } },
+            team: { select: { id: true, name: true } },
+          },
+          orderBy: [{ owner: { displayName: 'asc' } }],
+        },
       },
+    });
+
+    // Compute aggregate progress and status for grouped goals
+    return goals.map((g) => {
+      if (g.childGoals && g.childGoals.length > 0) {
+        const sum = g.childGoals.reduce((acc, c) => acc + (c.progress || 0), 0);
+        const avg = Math.round(sum / g.childGoals.length);
+        const allDone = g.childGoals.every((c) => c.status === 'DONE');
+        return {
+          ...g,
+          progress: avg,
+          status: allDone ? 'DONE' : 'ACTIVE',
+        };
+      }
+      return g;
     });
   }
 
@@ -125,9 +160,11 @@ export class GoalsService {
           description: dto.description?.trim() ?? null,
           type: type as any,
           status: 'ACTIVE',
+          targetScope: 'INDIVIDUAL',
           teamId: targetUser.teamId ?? dto.teamId ?? null,
           batchId: dto.batchId ?? null,
           ownerId: targetUser.id,
+          parentGoalId: null,
           progress: 0,
           startDate,
           endDate,
@@ -142,7 +179,7 @@ export class GoalsService {
       return g;
     }
 
-    // 2. SPECIFIC TEAM ASSIGNMENT (generates independent goal instances per team member)
+    // 2. SPECIFIC TEAM ASSIGNMENT (One parent goal with independent child progress instances)
     if (scope === 'TEAM') {
       const targetTeamId = me.role === 'ADMIN' ? dto.teamId : me.teamId;
       if (!targetTeamId) {
@@ -158,17 +195,46 @@ export class GoalsService {
         throw new BadRequestException('No active employees found in the selected team');
       }
 
-      const createdGoals = await this.prisma.$transaction(
-        members.map((member) =>
-          this.prisma.goal.create({
+      // Create Parent Group Goal
+      const parentGoal = await this.prisma.goal.create({
+        data: {
+          title: dto.title.trim(),
+          description: dto.description?.trim() ?? null,
+          type: type as any,
+          status: 'ACTIVE',
+          targetScope: 'TEAM',
+          teamId: targetTeamId,
+          batchId: dto.batchId ?? null,
+          ownerId: null,
+          parentGoalId: null,
+          progress: 0,
+          startDate,
+          endDate,
+          createdById: me.id,
+        },
+        include: {
+          team: { select: { id: true, name: true } },
+          createdBy: { select: { id: true, displayName: true } },
+        },
+      });
+
+      // Avoid duplicate assignments for the same employee under this goal
+      const createdGoals: any[] = [];
+      for (const member of members) {
+        const existing = await this.prisma.goal.findFirst({
+          where: { parentGoalId: parentGoal.id, ownerId: member.id },
+        });
+        if (!existing) {
+          const child = await this.prisma.goal.create({
             data: {
               title: dto.title.trim(),
               description: dto.description?.trim() ?? null,
               type: type as any,
               status: 'ACTIVE',
+              targetScope: 'INDIVIDUAL',
               teamId: targetTeamId,
-              batchId: dto.batchId ?? null,
               ownerId: member.id,
+              parentGoalId: parentGoal.id,
               progress: 0,
               startDate,
               endDate,
@@ -178,23 +244,24 @@ export class GoalsService {
               owner: { select: { id: true, displayName: true, email: true } },
               team: { select: { id: true, name: true } },
             },
-          })
-        )
-      );
+          });
+          createdGoals.push(child);
+        }
+      }
 
       await this.audit.log({
         actorId: me.id,
         action: 'GOAL_CREATE_TEAM',
         entity: 'goal',
-        entityId: targetTeamId,
+        entityId: parentGoal.id,
         metadata: { count: createdGoals.length },
         ip,
       });
 
-      return { count: createdGoals.length, goals: createdGoals, primary: createdGoals[0] };
+      return { count: createdGoals.length, parentGoal, id: parentGoal.id, goals: createdGoals };
     }
 
-    // 3. ALL TEAMS ASSIGNMENT (generates independent goal instances for members of all teams)
+    // 3. ALL TEAMS ASSIGNMENT (One parent goal with independent child progress instances across teams)
     if (scope === 'ALL_TEAMS') {
       const members = await this.prisma.user.findMany({
         where: { teamId: { not: null }, isActive: true, role: { in: ['EMPLOYEE', 'TEAM_LEAD', 'COORDINATOR'] } },
@@ -205,16 +272,44 @@ export class GoalsService {
         throw new BadRequestException('No active team members found in organization');
       }
 
-      const createdGoals = await this.prisma.$transaction(
-        members.map((member) =>
-          this.prisma.goal.create({
+      // Create Parent Group Goal
+      const parentGoal = await this.prisma.goal.create({
+        data: {
+          title: dto.title.trim(),
+          description: dto.description?.trim() ?? null,
+          type: type as any,
+          status: 'ACTIVE',
+          targetScope: 'ALL_TEAMS',
+          teamId: null,
+          batchId: dto.batchId ?? null,
+          ownerId: null,
+          parentGoalId: null,
+          progress: 0,
+          startDate,
+          endDate,
+          createdById: me.id,
+        },
+        include: {
+          createdBy: { select: { id: true, displayName: true } },
+        },
+      });
+
+      const createdGoals: any[] = [];
+      for (const member of members) {
+        const existing = await this.prisma.goal.findFirst({
+          where: { parentGoalId: parentGoal.id, ownerId: member.id },
+        });
+        if (!existing) {
+          const child = await this.prisma.goal.create({
             data: {
               title: dto.title.trim(),
               description: dto.description?.trim() ?? null,
               type: type as any,
               status: 'ACTIVE',
+              targetScope: 'INDIVIDUAL',
               teamId: member.teamId,
               ownerId: member.id,
+              parentGoalId: parentGoal.id,
               progress: 0,
               startDate,
               endDate,
@@ -224,22 +319,24 @@ export class GoalsService {
               owner: { select: { id: true, displayName: true } },
               team: { select: { id: true, name: true } },
             },
-          })
-        )
-      );
+          });
+          createdGoals.push(child);
+        }
+      }
 
       await this.audit.log({
         actorId: me.id,
         action: 'GOAL_CREATE_ALL_TEAMS',
         entity: 'goal',
+        entityId: parentGoal.id,
         metadata: { count: createdGoals.length },
         ip,
       });
 
-      return { count: createdGoals.length, goals: createdGoals, primary: createdGoals[0] };
+      return { count: createdGoals.length, parentGoal, id: parentGoal.id, goals: createdGoals };
     }
 
-    // 4. ALL EMPLOYEES ASSIGNMENT (Organization-wide independent goal instances)
+    // 4. ALL EMPLOYEES ASSIGNMENT (One parent goal with organization-wide independent instances)
     if (scope === 'ALL_EMPLOYEES') {
       const employees = await this.prisma.user.findMany({
         where: { isActive: true, role: { in: ['EMPLOYEE', 'TEAM_LEAD', 'COORDINATOR'] } },
@@ -250,16 +347,44 @@ export class GoalsService {
         throw new BadRequestException('No active employees found in organization');
       }
 
-      const createdGoals = await this.prisma.$transaction(
-        employees.map((member) =>
-          this.prisma.goal.create({
+      // Create Parent Group Goal
+      const parentGoal = await this.prisma.goal.create({
+        data: {
+          title: dto.title.trim(),
+          description: dto.description?.trim() ?? null,
+          type: type as any,
+          status: 'ACTIVE',
+          targetScope: 'ALL_EMPLOYEES',
+          teamId: null,
+          batchId: dto.batchId ?? null,
+          ownerId: null,
+          parentGoalId: null,
+          progress: 0,
+          startDate,
+          endDate,
+          createdById: me.id,
+        },
+        include: {
+          createdBy: { select: { id: true, displayName: true } },
+        },
+      });
+
+      const createdGoals: any[] = [];
+      for (const member of employees) {
+        const existing = await this.prisma.goal.findFirst({
+          where: { parentGoalId: parentGoal.id, ownerId: member.id },
+        });
+        if (!existing) {
+          const child = await this.prisma.goal.create({
             data: {
               title: dto.title.trim(),
               description: dto.description?.trim() ?? null,
               type: type as any,
               status: 'ACTIVE',
+              targetScope: 'INDIVIDUAL',
               teamId: member.teamId ?? null,
               ownerId: member.id,
+              parentGoalId: parentGoal.id,
               progress: 0,
               startDate,
               endDate,
@@ -269,19 +394,21 @@ export class GoalsService {
               owner: { select: { id: true, displayName: true } },
               team: { select: { id: true, name: true } },
             },
-          })
-        )
-      );
+          });
+          createdGoals.push(child);
+        }
+      }
 
       await this.audit.log({
         actorId: me.id,
         action: 'GOAL_CREATE_ALL_EMPLOYEES',
         entity: 'goal',
+        entityId: parentGoal.id,
         metadata: { count: createdGoals.length },
         ip,
       });
 
-      return { count: createdGoals.length, goals: createdGoals, primary: createdGoals[0] };
+      return { count: createdGoals.length, parentGoal, id: parentGoal.id, goals: createdGoals };
     }
 
     throw new BadRequestException('Invalid goal assignment target');
@@ -313,6 +440,26 @@ export class GoalsService {
         team: { select: { id: true, name: true } },
       },
     });
+
+    // If this goal is a child of a grouped goal, recalculate and persist the parent goal's average progress and status
+    if (g.parentGoalId) {
+      const siblings = await this.prisma.goal.findMany({
+        where: { parentGoalId: g.parentGoalId },
+        select: { progress: true, status: true },
+      });
+      if (siblings.length > 0) {
+        const sum = siblings.reduce((acc, s) => acc + (s.progress || 0), 0);
+        const avg = Math.round(sum / siblings.length);
+        const allDone = siblings.every((s) => s.status === 'DONE');
+        await this.prisma.goal.update({
+          where: { id: g.parentGoalId },
+          data: {
+            progress: avg,
+            status: allDone ? 'DONE' : 'ACTIVE',
+          },
+        });
+      }
+    }
 
     await this.audit.log({
       actorId: me.id,

@@ -76,18 +76,19 @@ export function ProgressBar({ pct, tone = 'brand' }: { pct: number; tone?: 'bran
   );
 }
 
-export function Empty({ icon = '📭', text }: { icon?: string; text: string }) {
+export function Empty({ icon = '📭', text, title, description, sub }: { icon?: string; text?: string; title?: string; description?: string; sub?: string }) {
+  const displayText = text || (title && (description || sub) ? `${title} – ${description || sub}` : title || description || sub || 'No items to display');
   return (
     <div className="flex flex-col items-center justify-center gap-1 py-8 text-center">
       <span className="text-3xl">{icon}</span>
-      <p className="text-sm text-slate-500">{text}</p>
+      <p className="text-sm text-slate-500">{displayText}</p>
     </div>
   );
 }
 
-export function Loading() {
+export function Loading({ label }: { label?: string } = {}) {
   return (
-    <div className="space-y-3 py-6" role="status" aria-label="Loading">
+    <div className="space-y-3 py-6" role="status" aria-label={label || "Loading"}>
       <div className="skeleton h-6 w-1/3" />
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">{[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-20" />)}</div>
       <div className="skeleton h-40 w-full" />
@@ -95,7 +96,7 @@ export function Loading() {
   );
 }
 
-export function Modal({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
+export function Modal({ open = true, onClose, title, children }: { open?: boolean; onClose: () => void; title: string; children: ReactNode }) {
   useEffect(() => {
     if (!open) return;
     const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose();

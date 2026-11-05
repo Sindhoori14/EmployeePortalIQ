@@ -353,31 +353,36 @@ model TicketMessage {
 // ---------- Goals & tasks ----------
 
 model Goal {
-  id          String     @id @default(cuid())
-  title       String     @db.VarChar(200)
-  description String?    @db.Text
-  type        GoalType   @default(WEEKLY)
-  status      GoalStatus @default(ACTIVE)
-  teamId      String?
-  batchId     String?
-  ownerId     String?
-  progress    Int        @default(0)
-  startDate   DateTime?  @db.Date
-  endDate     DateTime?  @db.Date
-  createdById String
-  createdAt   DateTime   @default(now()) @db.Timestamptz(6)
-  updatedAt   DateTime   @updatedAt @db.Timestamptz(6)
+  id           String     @id @default(cuid())
+  title        String     @db.VarChar(200)
+  description  String?    @db.Text
+  type         GoalType   @default(WEEKLY)
+  status       GoalStatus @default(ACTIVE)
+  targetScope  String?    @default("INDIVIDUAL") @db.VarChar(30)
+  teamId       String?
+  batchId      String?
+  ownerId      String?
+  parentGoalId String?
+  progress     Int        @default(0)
+  startDate    DateTime?  @db.Date
+  endDate      DateTime?  @db.Date
+  createdById  String
+  createdAt    DateTime   @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime   @updatedAt @db.Timestamptz(6)
 
-  team      Team?  @relation(fields: [teamId], references: [id], onDelete: SetNull)
-  batch     Batch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
-  createdBy User   @relation("GoalCreator", fields: [createdById], references: [id], onDelete: Restrict)
-  owner     User?  @relation("GoalOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  tasks     Task[]
+  team       Team?  @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  batch      Batch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  createdBy  User   @relation("GoalCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  owner      User?  @relation("GoalOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  parentGoal Goal?  @relation("GoalHierarchy", fields: [parentGoalId], references: [id], onDelete: Cascade)
+  childGoals Goal[] @relation("GoalHierarchy")
+  tasks      Task[]
 
   @@index([teamId, status])
   @@index([batchId, status])
   @@index([createdById])
   @@index([ownerId])
+  @@index([parentGoalId])
   @@map("goals")
 }
 
