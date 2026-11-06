@@ -1,4 +1,5 @@
 'use client';
+import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../../lib/api';
 import { Avatar, Empty, Loading, Modal, PageHeader } from '../../components/ui';

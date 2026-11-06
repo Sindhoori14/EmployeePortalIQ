@@ -71,7 +71,7 @@ export function useRequireAuth(roles?: SessionUser['role'][]) {
   // the effect and any future navigating condition becomes an infinite loop.
   const roleKey = (roles ?? []).join(',');
   useEffect(() => {
-    if (!user || user.avatarFileId) return;
+    if (!user || user.avatarFileId || user.mustChangePassword) return;
     api<{ key: string; value: unknown }[]>('/settings').then((rows) => setPhotoRequired(rows.find((r) => r.key === 'requireProfilePhoto')?.value !== false)).catch(() => setPhotoRequired(true));
   }, [user]);
   useEffect(() => {

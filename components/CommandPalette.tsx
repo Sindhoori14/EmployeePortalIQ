@@ -18,7 +18,6 @@ const PAGES: { href: string; label: string; roles?: string[]; keys: string }[] =
   { href: '/channels', label: 'Workspace', keys: 'message channel talk' },
   { href: '/announcements', label: 'Announcements', keys: 'news notice' },
   { href: '/teams', label: 'Teams', roles: ['ADMIN', 'TEAM_LEAD', 'COORDINATOR'], keys: 'group' },
-  { href: '/batches', label: 'Batches', roles: ['ADMIN', 'TEAM_LEAD'], keys: 'cohort intake' },
   { href: '/users', label: 'People', roles: ['ADMIN', 'TEAM_LEAD'], keys: 'users add import reset password' },
   { href: '/settings', label: 'Settings', roles: ['ADMIN'], keys: 'deadline holidays working days' },
   { href: '/audit', label: 'Audit log', roles: ['ADMIN'], keys: 'history security activity' },

@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, ApiError, fmtDate } from '../../lib/api';
+import { api, ApiError, fmtDate, downloadText } from '../../lib/api';
 import { Avatar, Empty, Loading, Modal, PageHeader, Stat } from '../../components/ui';
 import { useAuth, useRequireAuth } from '../../lib/auth-context';
 
@@ -80,6 +80,53 @@ export default function LeavesPage() {
 
   // Alerts
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  
+  function downloadSingleLeave(row: LeaveRecord) {
+    const headers = ['Applicant Name', 'Email', 'Role', 'Team', 'From Date', 'To Date', 'Reason', 'Status', 'TL Decided By', 'TL Note', 'Admin Decided By', 'Admin Note', 'Applied Date'];
+    const values = [
+      `"${(row.user?.displayName || 'Unknown').replace(/"/g, '""')}"`,
+      `"${(row.user?.email || '').replace(/"/g, '""')}"`,
+      `"${(row.user?.role || '').replace(/"/g, '""')}"`,
+      `"${(row.team?.name || 'No Team').replace(/"/g, '""')}"`,
+      row.fromDate,
+      row.toDate,
+      `"${(row.reason || '').replace(/"/g, '""')}"`,
+      row.status,
+      `"${(row.tlDecidedBy?.displayName || '').replace(/"/g, '""')}"`,
+      `"${(row.tlNote || '').replace(/"/g, '""')}"`,
+      `"${(row.decidedBy?.displayName || '').replace(/"/g, '""')}"`,
+      `"${(row.adminNote || '').replace(/"/g, '""')}"`,
+      row.createdAt ? new Date(row.createdAt).toLocaleDateString() : '',
+    ];
+    const csv = [headers.join(','), values.join(',')].join('\r\n');
+    const safeName = (row.user?.displayName || 'leave').replace(/[^a-zA-Z0-9_-]/g, '_');
+    downloadText(`leave_${safeName}_${row.fromDate}.csv`, csv);
+  }
+
+  function downloadAllLeaves(rows: LeaveRecord[]) {
+    const headers = ['Applicant Name', 'Email', 'Role', 'Team', 'From Date', 'To Date', 'Reason', 'Status', 'TL Decided By', 'TL Note', 'Admin Decided By', 'Admin Note', 'Applied Date'];
+    const lines = [headers.join(',')];
+    for (const row of rows) {
+      const values = [
+        `"${(row.user?.displayName || 'Unknown').replace(/"/g, '""')}"`,
+        `"${(row.user?.email || '').replace(/"/g, '""')}"`,
+        `"${(row.user?.role || '').replace(/"/g, '""')}"`,
+        `"${(row.team?.name || 'No Team').replace(/"/g, '""')}"`,
+        row.fromDate,
+        row.toDate,
+        `"${(row.reason || '').replace(/"/g, '""')}"`,
+        row.status,
+        `"${(row.tlDecidedBy?.displayName || '').replace(/"/g, '""')}"`,
+        `"${(row.tlNote || '').replace(/"/g, '""')}"`,
+        `"${(row.decidedBy?.displayName || '').replace(/"/g, '""')}"`,
+        `"${(row.adminNote || '').replace(/"/g, '""')}"`,
+        row.createdAt ? new Date(row.createdAt).toLocaleDateString() : '',
+      ];
+      lines.push(values.join(','));
+    }
+    downloadText(`leaves_export_${new Date().toISOString().slice(0, 10)}.csv`, lines.join('\r\n'));
+  }
 
   const loadData = useCallback(async () => {
     if (!user) return;
@@ -548,6 +595,14 @@ export default function LeavesPage() {
 
                   <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
                     <button
+                      type="button"
+                      onClick={() => downloadSingleLeave(item)}
+                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 transition"
+                      title="Download request"
+                    >
+                      Download
+                    </button>
+                    <button
                       onClick={() => openDecision(item, true)}
                       className="rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 transition"
                     >
@@ -825,6 +880,20 @@ export default function LeavesPage() {
                 <option value="REJECTED">Rejected</option>
                 <option value="CANCELLED">Cancelled</option>
               </select>
+              <button
+                type="button"
+                onClick={() => downloadAllLeaves(filteredHistory)}
+                disabled={filteredHistory.length === 0}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700 disabled:opacity-50 transition"
+                title="Download filtered leaves as CSV"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                Export CSV
+              </button>
             </div>
           </div>
 
@@ -841,6 +910,7 @@ export default function LeavesPage() {
                     <th className="py-2.5 px-3">Reason</th>
                     <th className="py-2.5 px-3">Status</th>
                     <th className="py-2.5 px-3">Approval Trail</th>
+                    <th className="py-2.5 px-3 text-right">Download</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -879,6 +949,21 @@ export default function LeavesPage() {
                           </p>
                         )}
                         {!row.tlDecidedBy && !row.decidedBy && <span className="text-slate-400">—</span>}
+                      </td>
+                      <td className="py-3 px-3 text-right whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => downloadSingleLeave(row)}
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 shadow-sm hover:border-brand-400 hover:bg-brand-50 hover:text-brand-700 active:scale-95 transition"
+                          title={`Download ${row.user?.displayName || 'employee'}'s leave details`}
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                            <polyline points="7 10 12 15 17 10" />
+                            <line x1="12" y1="15" x2="12" y2="3" />
+                          </svg>
+                          Download
+                        </button>
                       </td>
                     </tr>
                   ))}

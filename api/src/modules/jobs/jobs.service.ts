@@ -41,6 +41,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.attendance.runJobs().catch((e) => this.log.error(`attendance jobs: ${e?.message ?? e}`));
       await this.reportReminders();
+      await this.shiftEndReportAlert();
       await this.missingReportDigest();
       await this.meetingReminders();
       await this.ensureDailyMeetings();
@@ -53,6 +54,37 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** 30 minutes before the deadline: nudge everyone who has not reported yet. */
+  
+  /** 5 minutes before shift ends: urgent alert to submit daily report. */
+  private async shiftEndReportAlert() {
+    const today = dayStr();
+    if (!(await this.calendar.isWorkingDay(today))) return;
+    const now = minutesOfDay();
+    const cfg = await this.calendar.attendanceConfig();
+    if (now < cfg.shiftEnd - 5 || now >= cfg.shiftEnd) return;
+
+    const { start } = dayRange(today);
+    const checkedIn = await this.prisma.attendanceDay.findMany({
+      where: { day: dayToDate(today), checkOutAt: null },
+      select: { userId: true },
+    });
+    if (!checkedIn.length) return;
+    const ids = checkedIn.map((c) => c.userId);
+    const [reported, reminded] = await Promise.all([
+      this.prisma.dailyReport.findMany({ where: { reportDate: dayToDate(today), userId: { in: ids } }, select: { userId: true } }),
+      this.prisma.notification.findMany({ where: { type: 'REPORT_REMINDER', userId: { in: ids }, createdAt: { gte: start }, title: { contains: '5 minutes' } }, select: { userId: true } }),
+    ]);
+    const skip = new Set([...reported.map((r) => r.userId), ...reminded.map((r) => r.userId)]);
+    const targets = ids.filter((id) => !skip.has(id));
+    if (!targets.length) return;
+    const hh = String(Math.floor(cfg.shiftEnd / 60)).padStart(2, '0');
+    const mm = String(cfg.shiftEnd % 60).padStart(2, '0');
+    await this.notifications.notify(targets, {
+      type: 'REPORT_REMINDER', title: '⚠️ Shift ending in 5 minutes', body: `Please submit your daily report before shift ends at ${hh}:${mm}.`, link: '/reports',
+    });
+    this.log.log(`5-min shift end alert sent to ${targets.length} people`);
+  }
+
   private async reportReminders() {
     const today = dayStr();
     if (!(await this.calendar.isWorkingDay(today))) return;

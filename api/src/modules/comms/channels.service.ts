@@ -47,6 +47,50 @@ export class ChannelsService {
    * Makes sure every batch the user can see has its own channel. Runs on chat load and is
    * idempotent, so existing batches get channels without a manual migration or admin action.
    */
+  
+  /**
+   * Ensures every team has an active team channel for team chats.
+   */
+  private async ensureTeamChannels(me: RequestUser) {
+    const teams = await this.prisma.team.findMany({ select: { id: true, name: true }, take: 500 });
+    if (!teams.length) return;
+    const existing = await this.prisma.channel.findMany({
+      where: { teamId: { in: teams.map((t) => t.id) }, type: 'TEAM' },
+      select: { teamId: true },
+    });
+    const have = new Set(existing.map((c) => c.teamId));
+    const missing = teams.filter((t) => !have.has(t.id));
+    if (!missing.length) return;
+    for (const t of missing) {
+      await this.prisma.channel.create({
+        data: { type: 'TEAM', teamId: t.id, name: t.name.slice(0, 80), createdById: me.id },
+      }).catch(() => { /* handled */ });
+    }
+  }
+
+  async myTeamLead(me: RequestUser) {
+    if (me.teamId) {
+      const team = await this.prisma.team.findUnique({
+        where: { id: me.teamId },
+        select: {
+          name: true,
+          lead: { select: { id: true, displayName: true, role: true } },
+        },
+      });
+      if (team?.lead && team.lead.id !== me.id) {
+        return { id: team.lead.id, displayName: team.lead.displayName, role: team.lead.role, teamName: team.name };
+      }
+    }
+    const anyLead = await this.prisma.user.findFirst({
+      where: { role: 'TEAM_LEAD', isActive: true, id: { not: me.id } },
+      select: { id: true, displayName: true, role: true, team: { select: { name: true } } },
+    });
+    if (anyLead) {
+      return { id: anyLead.id, displayName: anyLead.displayName, role: anyLead.role, teamName: anyLead.team?.name };
+    }
+    return null;
+  }
+
   private async ensureBatchChannels(me: RequestUser) {
     const where: Prisma.BatchWhereInput = me.role === 'ADMIN'
       ? { isActive: true }
@@ -91,6 +135,7 @@ export class ChannelsService {
 
   /** Channel list with unread counts and last activity, in two queries total (not one per channel). */
   async list(me: RequestUser, filter?: string) {
+    await this.ensureTeamChannels(me);
     await this.ensureBatchChannels(me);
     const channels = await this.prisma.channel.findMany({
       where: await this.visibleWhere(me, filter), orderBy: [{ type: 'asc' }, { createdAt: 'asc' }], take: 300,

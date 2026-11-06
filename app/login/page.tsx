@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useAuth } from '../../lib/auth-context';
 import { api, ApiError } from '../../lib/api';
 import { AuthFrame } from '../../components/AuthFrame';
@@ -14,16 +14,6 @@ export default function LoginPage() {
   const [forgotMsg, setForgotMsg] = useState('');
   const [isShaking, setIsShaking] = useState(false);
 
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('elevateiq_saved_email');
-      if (saved) {
-        setEmail(saved);
-      }
-    } catch {
-      // localStorage may be unavailable
-    }
-  }, []);
 
   function triggerShake() {
     setIsShaking(false);
@@ -72,9 +62,6 @@ export default function LoginPage() {
     setBusy(true);
 
     try {
-      try {
-        localStorage.setItem('elevateiq_saved_email', trimmed);
-      } catch {}
       await login(trimmed, password);
     } catch (ex) {
       setErr(ex instanceof ApiError ? ex.message : 'Could not sign in. Check your email and password.');
@@ -99,7 +86,7 @@ export default function LoginPage() {
         <h2 className="a" id="t">Welcome back 👋</h2>
         <p className="a s">Sign in with your work email to open your workspace.</p>
 
-        <form id="f" onSubmit={submit} noValidate>
+        <form id="f" onSubmit={submit} noValidate autoComplete="off">
           {/* Work Email Field */}
           <label className="a lb" htmlFor="em" style={{ top: '185px' }}>
             <svg viewBox="0 0 24 24">
@@ -113,7 +100,7 @@ export default function LoginPage() {
               id="em"
               type="email"
               placeholder="you@company.com"
-              autoComplete="username"
+              autoComplete="off"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -133,7 +120,7 @@ export default function LoginPage() {
               id="pw"
               type={show ? 'text' : 'password'}
               placeholder="••••••••••••"
-              autoComplete="current-password"
+              autoComplete="new-password"
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}

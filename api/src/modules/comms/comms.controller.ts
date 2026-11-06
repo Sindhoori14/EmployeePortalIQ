@@ -55,6 +55,11 @@ export class CommsController {
     return this.channels.totalUnread(me);
   }
 
+  
+  @Get('channels/team-lead')
+  getTeamLead(@CurrentUser() me: RequestUser) {
+    return this.channels.myTeamLead(me);
+  }
   @Get('channels/contacts')
   contacts(@CurrentUser() me: RequestUser) {
     return this.channels.contacts(me);
