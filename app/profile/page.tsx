@@ -56,7 +56,7 @@ export default function ProfilePage() {
   const s = stats?.summary;
   return (
     <div className="mx-auto max-w-2xl">
-      <PageHeader title="My profile" sub={setup ? 'One last step: add a clear photo of your face so your team can recognise you.' : 'Your photo is shown next to your name across TeamFlow.'} />
+      <PageHeader title="My profile" sub={setup ? 'One last step: add a clear photo of your face so your team can recognise you.' : 'Your photo is shown next to your name across Employee Portal.'} />
       {setup && <div className="mb-5 rounded-2xl border border-brand-100 bg-brand-50 p-4 text-sm text-brand-700"><b>Welcome, {user.displayName.split(' ')[0]}!</b> A profile photo is required before you continue. It takes ten seconds.</div>}
       {err && <p className="err mb-4" role="alert">{err}</p>}
       {msg && <p className="ok mb-4" role="status">{msg}</p>}

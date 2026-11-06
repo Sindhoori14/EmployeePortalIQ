@@ -18,11 +18,11 @@ const poppins = localFont({
 });
 
 export const metadata: Metadata = {
-  title: 'TeamFlow · ElevateIQ',
+  title: 'Employee Portal · ElevateIQ',
   description: 'Private internal work OS',
   icons: { icon: '/logo.png', apple: '/logo.png' },
   manifest: '/manifest.webmanifest',
-  appleWebApp: { capable: true, title: 'TeamFlow', statusBarStyle: 'default' },
+  appleWebApp: { capable: true, title: 'Employee Portal', statusBarStyle: 'default' },
 };
 export const viewport: Viewport = { themeColor: '#0B2447', width: 'device-width', initialScale: 1 };
 

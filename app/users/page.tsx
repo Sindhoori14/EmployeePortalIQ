@@ -175,7 +175,7 @@ export default function UsersPage() {
     const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const lines = [['Name', 'Email', 'Role', 'Team', 'Batch', 'Temporary password'].join(',')]
       .concat(bulkResult.created.map((c) => [c.displayName, c.email, c.role, c.team, c.batch, c.tempPassword].map(esc).join(',')));
-    downloadText(`teamflow-new-users-${new Date().toISOString().slice(0, 10)}.csv`, lines.join('\n'));
+    downloadText(`employee-portal-new-users-${new Date().toISOString().slice(0, 10)}.csv`, lines.join('\n'));
   };
 
   if (loading || !user) return <Loading />;

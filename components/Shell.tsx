@@ -129,7 +129,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       <div className="mx-4 mt-5 rounded-xl bg-white px-3 py-2.5">
         <img src="/logo.png" alt="ElevateIQ" className="h-8 w-auto" />
       </div>
-      <p className="mx-5 mt-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-white/50">TeamFlow</p>
+      <p className="mx-5 mt-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-white/50">Employee Portal</p>
       <nav className="mt-3 flex-1 space-y-5 overflow-y-auto px-3 pb-4">
         {((user.role === 'HR_MANAGER' ? HR_MANAGER_GROUPS : user.role === 'HR_SUPPORT' ? HR_SUPPORT_GROUPS : GROUPS.map(g => ({ title: g.title, items: g.items.filter((i: any) => i.roles.includes(user.role)) })).filter(g => g.items.length > 0)) as any[]).map((g) => {
           const items = g.items;

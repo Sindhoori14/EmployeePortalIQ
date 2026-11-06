@@ -1,6 +1,6 @@
 {
-  "name": "TeamFlow",
-  "short_name": "TeamFlow",
+  "name": "Employee Portal",
+  "short_name": "Employee Portal",
   "description": "Tasks, daily reports and training for your team",
   "start_url": "/dashboard",
   "scope": "/",

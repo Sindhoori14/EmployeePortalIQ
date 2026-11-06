@@ -37,7 +37,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await api('/auth/login', { method: 'POST', body: { email, password } });
     const me = await api<SessionUser>('/auth/me');
     setUser(me);
-    router.replace(me.mustChangePassword ? '/change-password' : '/dashboard');
+    const target = me.mustChangePassword
+      ? '/change-password'
+      : me.role === 'HR_MANAGER'
+      ? '/hr-manager/dashboard'
+      : me.role === 'HR_SUPPORT'
+      ? '/hr-support/dashboard'
+      : '/dashboard';
+    router.replace(target);
   }, [router]);
 
   const logout = useCallback(async () => {
@@ -85,7 +92,15 @@ export function useRequireAuth(roles?: SessionUser['role'][]) {
       router.replace('/change-password');
       return;
     }
-    if (roles && !roles.includes(user.role) && user.role !== 'ADMIN') router.replace('/dashboard');
+    if (roles && !roles.includes(user.role) && user.role !== 'ADMIN') {
+      const fallback =
+        user.role === 'HR_MANAGER'
+          ? '/hr-manager/dashboard'
+          : user.role === 'HR_SUPPORT'
+          ? '/hr-support/dashboard'
+          : '/dashboard';
+      router.replace(fallback);
+    }
     // NOTE: no forced redirect for missing photos (it trapped new users on one
     // page and felt like the app was broken). PhotoBanner in Shell reminds
     // instead; the server still requires a photo at check-in time.
