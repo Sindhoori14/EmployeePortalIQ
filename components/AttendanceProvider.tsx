@@ -1,4 +1,49 @@
 'use client';
+function playBreakEndChime() {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+
+    const osc1 = ctx.createOscillator();
+    const gain1 = ctx.createGain();
+    osc1.type = 'triangle';
+    osc1.frequency.setValueAtTime(523.25, now); // C5
+    gain1.gain.setValueAtTime(0.25, now);
+    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+    osc1.connect(gain1);
+    gain1.connect(ctx.destination);
+    osc1.start(now);
+    osc1.stop(now + 0.3);
+
+    const osc2 = ctx.createOscillator();
+    const gain2 = ctx.createGain();
+    osc2.type = 'triangle';
+    osc2.frequency.setValueAtTime(783.99, now + 0.15); // G5
+    gain2.gain.setValueAtTime(0.3, now + 0.15);
+    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.55);
+    osc2.connect(gain2);
+    gain2.connect(ctx.destination);
+    osc2.start(now + 0.15);
+    osc2.stop(now + 0.55);
+
+    const osc3 = ctx.createOscillator();
+    const gain3 = ctx.createGain();
+    osc3.type = 'sine';
+    osc3.frequency.setValueAtTime(1046.50, now + 0.3); // C6
+    gain3.gain.setValueAtTime(0.35, now + 0.3);
+    gain3.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+    osc3.connect(gain3);
+    gain3.connect(ctx.destination);
+    osc3.start(now + 0.3);
+    osc3.stop(now + 0.8);
+  } catch (e) {
+    console.warn('Audio playback error', e);
+  }
+}
+
+
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError } from '../lib/api';
 import { useAuth } from '../lib/auth-context';
@@ -38,7 +83,7 @@ export function AttendanceProvider({ children }: { children: React.ReactNode }) 
   }, [apply]);
 
   useEffect(() => {
-    if (!user) { setToday(null); return; }
+    if (!user || user.mustChangePassword) { setToday(null); return; }
     void reload();
     const t = setInterval(() => { if (!document.hidden) void reload(); }, 120_000);
     const vis = () => { if (!document.hidden) void reload(); };
@@ -65,7 +110,17 @@ export function AttendanceProvider({ children }: { children: React.ReactNode }) 
     checkIn: (mode, note) => run(() => api('/attendance/check-in', { method: 'POST', body: { mode, note: note || undefined } })),
     checkOut: (note) => run(() => api('/attendance/check-out', { method: 'POST', body: { note: note || undefined } })),
     startBreak: (reason, note) => run(() => api('/attendance/break/start', { method: 'POST', body: { reason, note: note || undefined } })),
-    endBreak: () => run(() => api('/attendance/break/end', { method: 'POST' })),
+    endBreak: () => {
+      const openBreakReason = today?.record?.openBreak?.reason?.toUpperCase() || '';
+      const isNotLunch = openBreakReason !== 'LUNCH' && !openBreakReason.includes('LUNCH');
+      const isEmpOrTl = !user || user.role === 'EMPLOYEE' || user.role === 'TEAM_LEAD';
+      return run(async () => {
+        await api('/attendance/break/end', { method: 'POST' });
+        if (isEmpOrTl && isNotLunch) {
+          playBreakEndChime();
+        }
+      });
+    },
   }), [today, err, errCode, busy, reload, run]);
 
   return <C.Provider value={value}>{children}</C.Provider>;

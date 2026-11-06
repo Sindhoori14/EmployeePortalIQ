@@ -64,7 +64,9 @@ export async function api<T>(path: string, opts?: { method?: string; body?: unkn
     const msg = Array.isArray(data?.message) ? data.message.join(', ') : (data?.message ?? `Request failed (${res.status})`);
     const code = typeof data?.code === 'string' ? data.code : undefined;
     if (res.status === 403 && msg === 'PASSWORD_CHANGE_REQUIRED' && typeof window !== 'undefined') {
-      window.location.assign('/change-password');
+      if (window.location.pathname !== '/change-password') {
+        window.location.assign('/change-password');
+      }
     }
     if (res.status === 429) throw new ApiError(429, msg === `Request failed (429)` ? 'Too many requests. Please wait a moment.' : msg);
     throw new ApiError(res.status, msg, code);

@@ -288,6 +288,21 @@ export default function ChannelsPage() {
     if (v && now - lastTypingSent.current > 2500 && current) { lastTypingSent.current = now; getSocket().emit('typing', { channelId: current }); }
   };
 
+  
+  const messageTeamLead = async () => {
+    try {
+      setErr('');
+      const tl = await api<{ id: string; displayName: string } | null>('/channels/team-lead');
+      if (!tl) {
+        setErr('No Team Lead is currently assigned to your team.');
+        return;
+      }
+      await createChannel(null, tl.id);
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Could not message Team Lead');
+    }
+  };
+
   async function createChannel(e: React.FormEvent | null, dmUserId?: string) {
     e?.preventDefault();
     if (creating) return;
@@ -321,9 +336,8 @@ export default function ChannelsPage() {
   const filtered = channels.filter((c) => !search.trim() || c.name.toLowerCase().includes(search.trim().toLowerCase()));
   const groups = [
     { title: 'Direct messages', list: filtered.filter((c) => c.type === 'DM') },
-    { title: 'Group chats', list: filtered.filter((c) => c.type === 'GROUP') },
-    { title: 'Batch channels', list: filtered.filter((c) => c.type === 'BATCH') },
     { title: 'Team channels', list: filtered.filter((c) => c.type === 'TEAM') },
+    { title: 'Group chats', list: filtered.filter((c) => c.type === 'GROUP') },
     { title: 'Company', list: filtered.filter((c) => c.type === 'COMPANY') },
   ].filter((g) => g.list.length);
 
@@ -337,6 +351,20 @@ export default function ChannelsPage() {
           <button className="btn-secondary ml-auto !px-2.5 !py-1 text-xs" onClick={openCreate}>+ New</button>
         </div>
         <div className="p-2"><input className="input !py-1.5 text-sm" type="search" placeholder="Find a channel…" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Find a channel" /></div>
+        {user.role !== 'TEAM_LEAD' && (
+          <div className="px-2 pb-2">
+            <button
+              type="button"
+              onClick={messageTeamLead}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:from-brand-700 hover:to-indigo-700 active:scale-[0.98] transition"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+              <span>Message Team Lead</span>
+            </button>
+          </div>
+        )}
         <nav className="flex-1 overflow-y-auto p-2" aria-label="Channels">
           {groups.map((g) => (
             <div key={g.title} className="mb-3">
@@ -441,13 +469,13 @@ export default function ChannelsPage() {
                   createTab === 'dm' ? (
                     <button key={c.id} type="button" onClick={() => void createChannel(null, c.id)} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-slate-50">
                       <Avatar userId={c.id} name={c.displayName} size={28} />
-                      <span className="min-w-0 flex-1 truncate">{c.displayName}<span className="ml-2 text-[11px] text-slate-400">{c.role === 'EMPLOYEE' ? c.batch?.name ?? c.team?.name ?? '' : c.role.replace('_', ' ').toLowerCase()}</span></span>
+                      <span className="min-w-0 flex-1 truncate">{c.displayName}{c.role === 'TEAM_LEAD' ? <span className="ml-2 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">Team Lead</span> : <span className="ml-2 text-[11px] text-slate-400">{c.role === 'EMPLOYEE' ? c.team?.name ?? '' : c.role.replace('_', ' ').toLowerCase()}</span>}</span>
                     </button>
                   ) : (
                     <label key={c.id} className="flex cursor-pointer items-center gap-2 px-3 py-2 text-sm hover:bg-slate-50">
                       <input type="checkbox" checked={picked.includes(c.id)} onChange={(e) => setPicked((p) => e.target.checked ? [...p, c.id] : p.filter((x) => x !== c.id))} />
                       <Avatar userId={c.id} name={c.displayName} size={26} />
-                      <span className="min-w-0 flex-1 truncate">{c.displayName}<span className="ml-2 text-[11px] text-slate-400">{c.role === 'EMPLOYEE' ? c.batch?.name ?? c.team?.name ?? '' : c.role.replace('_', ' ').toLowerCase()}</span></span>
+                      <span className="min-w-0 flex-1 truncate">{c.displayName}{c.role === 'TEAM_LEAD' ? <span className="ml-2 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">Team Lead</span> : <span className="ml-2 text-[11px] text-slate-400">{c.role === 'EMPLOYEE' ? c.team?.name ?? '' : c.role.replace('_', ' ').toLowerCase()}</span>}</span>
                     </label>
                   )
                 ))}

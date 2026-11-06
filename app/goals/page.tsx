@@ -108,7 +108,7 @@ export default function GoalsPage() {
     try {
       const [goalRes, teamRes, userRes] = await Promise.all([
         api<Goal[]>('/goals').catch(() => []),
-        api<{ data: TeamOption[] }>('/teams?limit=100').then((r) => r.data || []).catch(() => []),
+        api<any>('/teams').then((r) => (Array.isArray(r) ? r : r?.data || [])).catch(() => []),
         canCreate
           ? api<{ data: UserOption[] }>('/users?limit=500').then((r) => r.data || []).catch(() => [])
           : Promise.resolve([]),

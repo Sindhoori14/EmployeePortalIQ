@@ -18,7 +18,7 @@ export function AvatarProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || user.mustChangePassword) return;
     refresh();
     api<{ online: string[] }>('/presence').then((r) => setOnline(new Set(r.online))).catch(() => {});
     const s = getSocket();

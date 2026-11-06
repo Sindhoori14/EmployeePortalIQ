@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError, ROLE_LABEL } from '../../lib/api';
 import { Loading, PageHeader } from '../../components/ui';
-import { useRequireAuth } from '../../lib/auth-context';
+import { useAuth, useRequireAuth } from '../../lib/auth-context';
 
 const DAYS = [
   { n: 1, l: 'Mon' }, { n: 2, l: 'Tue' }, { n: 3, l: 'Wed' }, { n: 4, l: 'Thu' }, { n: 5, l: 'Fri' }, { n: 6, l: 'Sat' }, { n: 0, l: 'Sun' },
@@ -10,6 +10,7 @@ const DAYS = [
 
 export default function SettingsPage() {
   const { user, loading } = useRequireAuth(['ADMIN']);
+  const { logout } = useAuth();
   const [time, setTime] = useState('18:00');
   const [workDays, setWorkDays] = useState<number[]>([1, 2, 3, 4, 5, 6]);
   const [holidays, setHolidays] = useState<string[]>([]);
@@ -137,6 +138,23 @@ export default function SettingsPage() {
           </dl>
         </section>
       )}
+
+      <section className="card mt-8 border border-red-200 bg-red-50/30">
+        <h2 className="h2 text-red-900">Sign out</h2>
+        <p className="mb-4 text-sm text-slate-600">Safely sign out of your ElevateIQ session on this device.</p>
+        <button
+          type="button"
+          onClick={() => logout()}
+          className="inline-flex items-center gap-2 rounded-xl bg-red-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-red-700 active:scale-[0.98] transition"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+            <polyline points="16 17 21 12 16 7" />
+            <line x1="21" y1="12" x2="9" y2="12" />
+          </svg>
+          Sign out
+        </button>
+      </section>
     </div>
   );
 }

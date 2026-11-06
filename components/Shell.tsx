@@ -1,4 +1,6 @@
 'use client';
+import { ReportShiftReminder } from './ReportShiftReminder';
+
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -47,7 +49,6 @@ const GROUPS: { title: string; items: { href: string; label: string; icon: strin
   ] },
   { title: 'Manage', items: [
     { href: '/teams', label: 'Teams', icon: 'teams', roles: ['ADMIN', 'TEAM_LEAD', 'COORDINATOR'] },
-    { href: '/batches', label: 'Batches', icon: 'batches', roles: ['ADMIN', 'TEAM_LEAD'] },
     { href: '/users', label: 'People', icon: 'users', roles: ['ADMIN', 'TEAM_LEAD'] },
     { href: '/settings', label: 'Settings', icon: 'settings', roles: ['ADMIN'] },
     { href: '/audit', label: 'Audit log', icon: 'audit', roles: ['ADMIN'] },
@@ -129,9 +130,22 @@ export function Shell({ children }: { children: React.ReactNode }) {
         </button>
         <AttendanceChip />
         <NotifBell />
+        <button
+          onClick={logout}
+          title="Sign out"
+          className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:border-red-200 hover:bg-red-50 hover:text-red-600 transition"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+            <polyline points="16 17 21 12 16 7" />
+            <line x1="21" y1="12" x2="9" y2="12" />
+          </svg>
+          <span className="hidden sm:inline">Sign out</span>
+        </button>
       </header>
       <CommandPalette />
       <main id="main" className="mx-auto w-full max-w-7xl px-4 pb-16 pt-6 lg:px-8">
+        <ReportShiftReminder />
         <PhotoBanner />
         {children}
       </main>
