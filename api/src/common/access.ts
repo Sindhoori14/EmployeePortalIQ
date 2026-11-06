@@ -31,8 +31,13 @@ export function canSeeChannel(
   ch: ChannelAccessInfo,
 ): boolean {
   const type = ch.type ?? (ch.teamId ? 'TEAM' : 'COMPANY');
-  if (type === 'GROUP' || type === 'DM') {
-    // Private by design: even admins only see groups/DMs they are members of.
+  if (type === 'GROUP') {
+    // CR8: All Admins can view GROUP channels, plus creator and explicit members.
+    if (me.role === 'ADMIN') return true;
+    return ch.createdById === me.id || !!ch.memberIds?.includes(me.id);
+  }
+  if (type === 'DM') {
+    // DMs remain strictly private between participants.
     return ch.createdById === me.id || !!ch.memberIds?.includes(me.id);
   }
   if (me.role === 'ADMIN') return true;

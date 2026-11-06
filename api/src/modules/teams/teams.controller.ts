@@ -10,24 +10,24 @@ export class TeamsController {
   constructor(private teams: TeamsService) {}
 
   @Get()
-  list() {
-    return this.teams.list();
+  list(@CurrentUser() me: RequestUser) {
+    return this.teams.list(me);
   }
 
   @Get(':id')
   get(@CurrentUser() me: RequestUser, @Param('id') id: string) {
-    return this.teams.get(id, me.role);
+    return this.teams.get(me, id);
   }
 
-  @Roles('ADMIN')
+  @Roles('ADMIN', 'TEAM_LEAD')
   @Post()
   create(@CurrentUser() me: RequestUser, @Body() dto: CreateTeamDto, @Req() req: Request) {
-    return this.teams.create(me.id, dto, req.ip);
+    return this.teams.create(me, dto, req.ip);
   }
 
-  @Roles('ADMIN')
+  @Roles('ADMIN', 'TEAM_LEAD')
   @Patch(':id')
   update(@CurrentUser() me: RequestUser, @Param('id') id: string, @Body() dto: UpdateTeamDto, @Req() req: Request) {
-    return this.teams.update(me.id, id, dto, req.ip);
+    return this.teams.update(me, id, dto, req.ip);
   }
 }

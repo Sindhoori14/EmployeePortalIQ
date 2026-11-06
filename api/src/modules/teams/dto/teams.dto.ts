@@ -1,4 +1,4 @@
-import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsArray, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class CreateTeamDto {
   @IsString()
@@ -22,6 +22,11 @@ export class CreateTeamDto {
   @IsOptional()
   @IsString()
   hrId?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  memberIds?: string[];
 }
 
 export class UpdateTeamDto {
@@ -47,4 +52,9 @@ export class UpdateTeamDto {
   @IsOptional()
   @IsString()
   hrId?: string | null;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  memberIds?: string[];
 }

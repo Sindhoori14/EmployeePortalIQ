@@ -252,7 +252,7 @@ export default function ReportsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Daily Standup Reports"
-        subtitle={`Track daily accomplishments, blockers, and next-day plans. Target deadline is ${deadline}.`}
+        sub={`Track daily accomplishments, blockers, and next-day plans. Target deadline is ${deadline}.`}
       />
 
       {/* Status Messages */}
@@ -442,7 +442,7 @@ export default function ReportsPage() {
                             className="group flex cursor-pointer items-center justify-between rounded-xl border border-emerald-200 bg-white p-3.5 shadow-2xs hover:border-emerald-500 hover:shadow-sm transition"
                           >
                             <div className="flex items-center gap-3 min-w-0">
-                              <Avatar name={u.displayName} size="sm" />
+                              <Avatar name={u.displayName} size={28} />
                               <div className="min-w-0">
                                 <p className="font-semibold text-slate-900 text-xs truncate group-hover:text-emerald-700">
                                   {u.displayName}
@@ -504,7 +504,7 @@ export default function ReportsPage() {
                           className="flex items-center justify-between rounded-xl border border-rose-100 bg-white p-3 shadow-2xs"
                         >
                           <div className="flex items-center gap-3 min-w-0">
-                            <Avatar name={u.displayName} size="sm" />
+                            <Avatar name={u.displayName} size={28} />
                             <div className="min-w-0">
                               <p className="font-semibold text-slate-800 text-xs truncate">{u.displayName}</p>
                               <p className="text-[10px] text-slate-400 truncate">
@@ -764,7 +764,7 @@ export default function ReportsPage() {
             {/* Applicant / User Info Header */}
             <div className="flex items-center justify-between rounded-xl bg-slate-50 border border-slate-200 p-3.5">
               <div className="flex items-center gap-3">
-                <Avatar name={activeReport.user?.displayName || 'User'} size="md" />
+                <Avatar name={activeReport.user?.displayName || 'User'} size={36} />
                 <div>
                   <p className="font-bold text-navy text-sm">
                     {activeReport.user?.displayName || 'Employee'}

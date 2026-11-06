@@ -13,7 +13,7 @@ const MSG_INCLUDE = {
 } as const;
 
 const ACCESS_INCLUDE = {
-  members: { select: { userId: true, user: { select: { id: true, displayName: true } } } },
+  members: { select: { userId: true, user: { select: { id: true, displayName: true, role: true } } } },
   batch: { select: { leadId: true, coordinatorId: true } },
 } as const;
 
@@ -118,7 +118,8 @@ export class ChannelsService {
       return { type: 'TEAM', teamId: filter };
     }
     // Admins see every public channel, but private groups/DMs only when they are members.
-    if (me.role === 'ADMIN') return { OR: [{ type: { notIn: ['GROUP', 'DM'] } }, { members: { some: { userId: me.id } } }] };
+    // Admins see every public channel, all groups (CR8), but private DMs only when they are members.
+    if (me.role === 'ADMIN') return { OR: [{ type: { in: ['COMPANY', 'TEAM', 'BATCH', 'GROUP'] } }, { type: 'DM', members: { some: { userId: me.id } } }] };
     const ledBatches = await this.prisma.batch.findMany({
       where: { OR: [{ leadId: me.id }, { coordinatorId: me.id }] }, select: { id: true },
     });
@@ -142,7 +143,7 @@ export class ChannelsService {
       include: {
         team: { select: { name: true } },
         batch: { select: { id: true, name: true } },
-        members: { select: { userId: true, user: { select: { id: true, displayName: true } } } },
+        members: { select: { userId: true, user: { select: { id: true, displayName: true, role: true } } } },
       },
     });
     if (!channels.length) return [];
@@ -162,7 +163,7 @@ export class ChannelsService {
       return {
         id: c.id, type: c.type, name: peer?.displayName ?? c.name, description: c.description,
         teamId: c.teamId, batchId: c.batchId, team: c.team, batch: c.batch, createdAt: c.createdAt,
-        peer, memberIds: (c.members ?? []).map((m) => m.userId),
+        peer, memberIds: (c.members ?? []).map((m) => m.userId), members: (c.members ?? []).map((m) => ({ id: m.userId, displayName: m.user?.displayName, role: (m.user as any)?.role })), createdById: c.createdById, isCreator: c.createdById === me.id, canEdit: c.type === 'GROUP' ? c.createdById === me.id : false,
         memberCount: c.members.length,
         unread: by.get(c.id)?.unread ?? 0, lastMessageAt: by.get(c.id)?.last ?? null,
       };
@@ -174,10 +175,40 @@ export class ChannelsService {
     return { unread: list.reduce((s, c) => s + c.unread, 0) };
   }
 
-  /** Active people for the "new group" / "new message" pickers. */
+  async get(me: RequestUser, channelId: string) {
+    const ch = await this.mustSee(me, channelId);
+    return {
+      id: ch.id,
+      type: ch.type,
+      name: ch.name,
+      description: ch.description,
+      teamId: ch.teamId,
+      batchId: ch.batchId,
+      createdById: ch.createdById,
+      isCreator: ch.createdById === me.id,
+      canEdit: ch.type === 'GROUP' ? ch.createdById === me.id : false,
+      memberCount: ch.members.length,
+      memberIds: ch.members.map((m) => m.userId),
+      members: ch.members.map((m) => ({ id: m.userId, displayName: m.user?.displayName, role: (m.user as any)?.role })),
+      createdAt: ch.createdAt,
+    };
+  }
+
+  /** Active people for the "new group" / "new message" pickers. TLs restricted to their authorized team scope (CR8). */
   async contacts(me: RequestUser) {
+    let where: Prisma.UserWhereInput = { isActive: true, id: { not: me.id } };
+    if (me.role === 'TEAM_LEAD') {
+      const tlTeams = await this.prisma.team.findMany({
+        where: { OR: [{ leadId: me.id }, { createdById: me.id }, ...(me.teamId ? [{ id: me.teamId }] : [])] },
+        select: { id: true },
+      });
+      const teamIds = tlTeams.map((t) => t.id).filter(Boolean);
+      where = { isActive: true, id: { not: me.id }, teamId: { in: teamIds } };
+    } else if (me.role === 'COORDINATOR' || me.role === 'EMPLOYEE') {
+      where = { isActive: true, id: { not: me.id }, ...(me.teamId ? { teamId: me.teamId } : {}) };
+    }
     const users = await this.prisma.user.findMany({
-      where: { isActive: true, id: { not: me.id } }, take: 500,
+      where, take: 500,
       select: { id: true, displayName: true, role: true, team: { select: { name: true } }, batch: { select: { name: true } } },
       orderBy: { displayName: 'asc' },
     });
@@ -226,6 +257,24 @@ export class ChannelsService {
 
     if (type === 'GROUP') {
       if (!name) throw new BadRequestException('Group name is required');
+      if (me.role === 'TEAM_LEAD') {
+        const tlTeams = await this.prisma.team.findMany({
+          where: { OR: [{ leadId: me.id }, { createdById: me.id }, ...(me.teamId ? [{ id: me.teamId }] : [])] },
+          select: { id: true },
+        });
+        const teamIds = new Set(tlTeams.map((t) => t.id).filter(Boolean));
+        const rawMembers = (dto.memberIds ?? []).filter((id) => id !== me.id);
+        if (rawMembers.length) {
+          const candidateUsers = await this.prisma.user.findMany({
+            where: { id: { in: rawMembers } },
+            select: { id: true, teamId: true },
+          });
+          const hasUnauthorized = candidateUsers.some((u) => !u.teamId || !teamIds.has(u.teamId));
+          if (hasUnauthorized) {
+            throw new BadRequestException('Team Leads can only select members within their authorized team scope');
+          }
+        }
+      }
       const ids = await this.validMemberIds(me, dto.memberIds ?? [], true);
       return this.prisma.channel.create({
         data: {
@@ -276,7 +325,21 @@ export class ChannelsService {
   async addMembers(me: RequestUser, channelId: string, userIds: string[]) {
     const ch = await this.mustSee(me, channelId);
     if (ch.type !== 'GROUP') throw new BadRequestException('Only group chats have members');
-    if (me.role !== 'ADMIN' && ch.createdById !== me.id) throw new ForbiddenException('Only the group creator can add people');
+    if (ch.createdById !== me.id) throw new ForbiddenException('Only the group creator can add people');
+    if (me.role === 'TEAM_LEAD') {
+      const tlTeams = await this.prisma.team.findMany({
+        where: { OR: [{ leadId: me.id }, { createdById: me.id }, ...(me.teamId ? [{ id: me.teamId }] : [])] },
+        select: { id: true },
+      });
+      const teamIds = new Set(tlTeams.map((t) => t.id).filter(Boolean));
+      const targetUsers = await this.prisma.user.findMany({
+        where: { id: { in: userIds } },
+        select: { id: true, teamId: true },
+      });
+      if (targetUsers.some((u) => !u.teamId || !teamIds.has(u.teamId))) {
+        throw new BadRequestException('Team Leads can only add members within their authorized team scope');
+      }
+    }
     const ids = await this.validMemberIds(me, userIds, false);
     await this.prisma.channelMember.createMany({ data: ids.map((userId) => ({ channelId, userId })), skipDuplicates: true });
     return { ok: true };
@@ -285,10 +348,29 @@ export class ChannelsService {
   async removeMember(me: RequestUser, channelId: string, userId: string) {
     const ch = await this.mustSee(me, channelId);
     if (ch.type !== 'GROUP') throw new ForbiddenException('You can only leave a group chat');
-    const can = userId === me.id || me.role === 'ADMIN' || ch.createdById === me.id;
+    const can = userId === me.id || ch.createdById === me.id;
     if (!can) throw new ForbiddenException('Only the group creator can remove people');
     await this.prisma.channelMember.deleteMany({ where: { channelId, userId } });
     return { ok: true };
+  }
+
+  async updateGroup(me: RequestUser, channelId: string, dto: { name?: string; description?: string }) {
+    const ch = await this.mustSee(me, channelId);
+    if (ch.type !== 'GROUP') throw new BadRequestException('Only group chats can be updated here');
+    if (ch.createdById !== me.id) throw new ForbiddenException('Only the group creator can edit group details');
+    const name = dto.name?.trim();
+    if (!name) throw new BadRequestException('Group name is required');
+    const updated = await this.prisma.channel.update({
+      where: { id: channelId },
+      data: { name, description: dto.description !== undefined ? dto.description : ch.description },
+      include: ACCESS_INCLUDE,
+    });
+    return {
+      id: updated.id,
+      name: updated.name,
+      description: updated.description,
+      memberCount: updated.members.length,
+    };
   }
 
   private async mustSee(me: RequestUser, channelId: string) {
@@ -321,6 +403,12 @@ export class ChannelsService {
 
   async post(me: RequestUser, channelId: string, dto: PostMessageDto) {
     const ch = await this.mustSee(me, channelId);
+    if (ch.type === 'GROUP') {
+      const isMember = (ch.members ?? []).some((m) => m.userId === me.id);
+      if (!isMember && ch.createdById !== me.id) {
+        throw new ForbiddenException('You have view-only access to this group');
+      }
+    }
     const body = (dto.body ?? '').trim();
     if (!body && !dto.fileIds?.length) throw new BadRequestException('Write a message or attach a file');
 

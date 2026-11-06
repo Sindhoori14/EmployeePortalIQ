@@ -14,6 +14,8 @@ interface Ch {
   team?: { name: string } | null; batch?: { id: string; name: string } | null;
   peer?: { id: string; displayName: string } | null;
   memberIds?: string[]; memberCount?: number;
+  members?: Array<{ id: string; displayName: string; role?: string }>;
+  createdById?: string; isCreator?: boolean; canEdit?: boolean;
   unread: number; lastMessageAt: string | null; description?: string | null;
 }
 interface Contact { id: string; displayName: string; role: string; team?: { name: string } | null; batch?: { name: string } | null }
@@ -99,6 +101,24 @@ export default function ChannelsPage() {
   const [creating, setCreating] = useState(false);
   const [search, setSearch] = useState('');
 
+  // Group Details & Management (CR8)
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const [groupDetails, setGroupDetails] = useState<{
+    id: string;
+    name: string;
+    description: string | null;
+    createdById: string;
+    isCreator: boolean;
+    memberCount: number;
+    members: Array<{ id: string; displayName: string; role?: string }>;
+  } | null>(null);
+  const [groupBusy, setGroupBusy] = useState(false);
+  const [groupErr, setGroupErr] = useState('');
+  const [groupName, setGroupName] = useState('');
+  const [groupDesc, setGroupDesc] = useState('');
+  const [addMembersOpen, setAddMembersOpen] = useState(false);
+  const [addPicked, setAddPicked] = useState<string[]>([]);
+
   const up = useUploads('CHANNEL', current || undefined);
   const scroller = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
@@ -119,7 +139,7 @@ export default function ChannelsPage() {
     setCreateErr(''); setPicked([]); setContactSearch(''); setNewCh({ name: '', teamId: '' });
     setCreateTab(canCreateChannel ? 'channel' : 'group');
     setCreateOpen(true);
-    if (!contacts.length) api<Contact[]>('/channels/contacts').then(setContacts).catch(() => setContacts([]));
+    api<Contact[]>('/channels/contacts').then(setContacts).catch(() => setContacts([]));
   };
 
   const loadChannels = useCallback(async () => {
@@ -288,7 +308,6 @@ export default function ChannelsPage() {
     if (v && now - lastTypingSent.current > 2500 && current) { lastTypingSent.current = now; getSocket().emit('typing', { channelId: current }); }
   };
 
-  
   const messageTeamLead = async () => {
     try {
       setErr('');
@@ -329,6 +348,84 @@ export default function ChannelsPage() {
     finally { setCreating(false); }
   }
 
+  // CR8: Open Group Management / Info Modal
+  const openGroupModal = async (c: Ch) => {
+    setGroupErr('');
+    setGroupName(c.name);
+    setGroupDesc(c.description ?? '');
+    setAddMembersOpen(false);
+    setAddPicked([]);
+    setGroupModalOpen(true);
+    try {
+      const d = await api<any>(`/channels/${c.id}`);
+      setGroupDetails(d);
+      setGroupName(d.name);
+      setGroupDesc(d.description ?? '');
+    } catch {
+      setGroupDetails({
+        id: c.id,
+        name: c.name,
+        description: c.description ?? null,
+        createdById: c.createdById ?? '',
+        isCreator: !!c.isCreator,
+        memberCount: c.memberCount ?? c.memberIds?.length ?? 0,
+        members: c.members ?? [],
+      });
+    }
+    api<Contact[]>('/channels/contacts').then(setContacts).catch(() => setContacts([]));
+  };
+
+  // CR8: Save group details (name / description) - Creator only
+  const saveGroupDetails = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cur || groupBusy) return;
+    setGroupBusy(true); setGroupErr('');
+    try {
+      await api(`/channels/${cur.id}/group`, { method: 'PATCH', body: { name: groupName.trim(), description: groupDesc.trim() || undefined } });
+      await loadChannels();
+      setGroupModalOpen(false);
+    } catch (e) {
+      setGroupErr(e instanceof ApiError ? e.message : 'Failed to update group');
+    } finally {
+      setGroupBusy(false);
+    }
+  };
+
+  // CR8: Add members to group - Creator only
+  const addGroupMembers = async () => {
+    if (!cur || !addPicked.length || groupBusy) return;
+    setGroupBusy(true); setGroupErr('');
+    try {
+      await api(`/channels/${cur.id}/members`, { method: 'POST', body: { userIds: addPicked } });
+      setAddPicked([]);
+      setAddMembersOpen(false);
+      const d = await api<any>(`/channels/${cur.id}`);
+      setGroupDetails(d);
+      await loadChannels();
+    } catch (e) {
+      setGroupErr(e instanceof ApiError ? e.message : 'Failed to add members');
+    } finally {
+      setGroupBusy(false);
+    }
+  };
+
+  // CR8: Remove member from group - Creator only (or self leaving)
+  const removeGroupMember = async (userId: string) => {
+    if (!cur || groupBusy) return;
+    if (!confirm('Remove this person from the group?')) return;
+    setGroupBusy(true); setGroupErr('');
+    try {
+      await api(`/channels/${cur.id}/members/${userId}`, { method: 'DELETE' });
+      const d = await api<any>(`/channels/${cur.id}`);
+      setGroupDetails(d);
+      await loadChannels();
+    } catch (e) {
+      setGroupErr(e instanceof ApiError ? e.message : 'Failed to remove member');
+    } finally {
+      setGroupBusy(false);
+    }
+  };
+
   if (loading || !user) return <Loading />;
   const cur = channels.find((c) => c.id === current);
   const typingNames = Object.keys(typing).map((id) => names.get(id) ?? 'Someone');
@@ -341,6 +438,9 @@ export default function ChannelsPage() {
     { title: 'Company', list: filtered.filter((c) => c.type === 'COMPANY') },
   ].filter((g) => g.list.length);
 
+  // CR8: Non-member Admins have view-only access (cannot post messages)
+  const isViewOnlyGroup = !!cur && cur.type === 'GROUP' && !cur.isCreator && !cur.memberIds?.includes(user.id);
+
   return (
     <div className="-mx-4 -mt-2 flex h-[calc(100dvh-5.5rem)] overflow-hidden rounded-none border border-slate-200 bg-white sm:mx-0 sm:mt-0 sm:rounded-2xl">
       {/* channel list */}
@@ -351,7 +451,7 @@ export default function ChannelsPage() {
           <button className="btn-secondary ml-auto !px-2.5 !py-1 text-xs" onClick={openCreate}>+ New</button>
         </div>
         <div className="p-2"><input className="input !py-1.5 text-sm" type="search" placeholder="Find a channel…" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Find a channel" /></div>
-        {user.role !== 'TEAM_LEAD' && (
+        {user.role !== 'ADMIN' && user.role !== 'TEAM_LEAD' && (
           <div className="px-2 pb-2">
             <button
               type="button"
@@ -372,7 +472,13 @@ export default function ChannelsPage() {
               {g.list.map((c) => (
                 <button key={c.id} onClick={() => openChannel(c.id)} aria-current={current === c.id} className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition ${current === c.id ? 'bg-brand-600 text-white' : 'text-slate-700 hover:bg-white'}`}>
                   {c.type === 'DM' && c.peer ? <Avatar userId={c.peer.id} name={c.peer.displayName} size={26} /> : <span className="w-4 text-center opacity-60">{c.type === 'DM' ? '@' : '#'}</span>}
-                  <span className={`min-w-0 flex-1 truncate ${c.unread && current !== c.id ? 'font-bold text-ink-900' : ''}`}>{c.name}{c.type === 'TEAM' && c.team?.name ? <span className="ml-1 text-[11px] opacity-60">· {c.team.name}</span> : null}{c.type === 'BATCH' && c.batch?.name ? <span className="ml-1 text-[11px] opacity-60">· batch</span> : null}</span>
+                  <span className={`min-w-0 flex-1 truncate ${c.unread && current !== c.id ? 'font-bold text-ink-900' : ''}`}>
+                    {c.name}
+                    {c.type === 'TEAM' && c.team?.name ? <span className="ml-1 text-[11px] opacity-60">· {c.team.name}</span> : null}
+                    {c.type === 'BATCH' && c.batch?.name ? <span className="ml-1 text-[11px] opacity-60">· batch</span> : null}
+                    {c.type === 'GROUP' && c.isCreator ? <span className="ml-1 text-[10px] font-bold text-emerald-500">· creator</span> : null}
+                    {c.type === 'GROUP' && !c.isCreator && user.role === 'ADMIN' ? <span className="ml-1 text-[10px] font-medium opacity-60">· view only</span> : null}
+                  </span>
                   {c.unread > 0 && current !== c.id && <span className="rounded-full bg-accent-600 px-1.5 text-[11px] font-bold leading-5 text-white">{c.unread > 99 ? '99+' : c.unread}</span>}
                 </button>
               ))}
@@ -395,7 +501,24 @@ export default function ChannelsPage() {
               {cur.type === 'COMPANY' && <span className="rounded bg-accent-50 px-1.5 text-[10px] font-bold uppercase text-accent-700">company</span>}
               {cur.type === 'TEAM' && <span className="rounded bg-slate-100 px-1.5 text-[10px] font-bold uppercase text-slate-600">team</span>}
               {cur.type === 'BATCH' && <span className="rounded bg-slate-100 px-1.5 text-[10px] font-bold uppercase text-slate-600">batch</span>}
-              {cur.type === 'GROUP' && <span className="text-xs text-slate-400">{cur.memberCount ?? cur.memberIds?.length ?? 0} members</span>}
+              {cur.type === 'GROUP' && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-400">{cur.memberCount ?? cur.memberIds?.length ?? 0} members</span>
+                  {cur.isCreator ? (
+                    <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold uppercase text-emerald-700">Creator</span>
+                  ) : user.role === 'ADMIN' ? (
+                    <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold uppercase text-amber-700">View-only</span>
+                  ) : (
+                    <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-slate-600">Member</span>
+                  )}
+                  <button
+                    onClick={() => void openGroupModal(cur)}
+                    className="ml-1 rounded-lg border border-slate-200 bg-white px-2 py-0.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 transition"
+                  >
+                    {cur.isCreator ? 'Manage Group' : 'Group Info'}
+                  </button>
+                </div>
+              )}
               {cur.type === 'DM' && <span className="text-xs text-slate-400">direct message</span>}
               {conn === 'down' && <span className="ml-auto flex items-center gap-1.5 text-xs font-semibold text-amber-600"><span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />Reconnecting…</span>}
             </header>
@@ -420,26 +543,37 @@ export default function ChannelsPage() {
             </div>
             {newBelow > 0 && <button className="absolute bottom-28 left-1/2 z-10 -translate-x-1/2 rounded-full bg-brand-600 px-4 py-1.5 text-xs font-semibold text-white shadow-lg" onClick={() => scrollBottom(true)}>↓ {newBelow} new message{newBelow > 1 ? 's' : ''}</button>}
 
-            <div className="relative border-t border-slate-200 p-3">
-              {dnd.dragging && <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-accent-600 bg-accent-50/90 text-sm font-semibold text-accent-700">Drop files to attach</div>}
-              <p className="mb-1 h-4 text-xs text-slate-400" aria-live="polite">{typingNames.length ? `${typingNames.slice(0, 2).join(' and ')}${typingNames.length > 2 ? ' and others' : ''} ${typingNames.length > 1 ? 'are' : 'is'} typing…` : ''}</p>
-              {up.items.length > 0 && <div className="mb-2"><UploadChips items={up.items} onRemove={up.remove} onRetry={up.retry} /></div>}
-              <div className="flex items-end gap-2">
-                <AttachButton onFiles={(f) => { void up.add(f).then((w) => w && setErr(w)); }} disabled={up.items.length >= 10} />
-                <textarea
-                  ref={taRef} rows={1} value={text} maxLength={4000} placeholder={cur.type === 'DM' ? `Message ${cur.name}` : `Message #${cur.name}`} aria-label="Message"
-                  className="input max-h-40 min-h-[2.75rem] flex-1 resize-none py-2.5"
-                  onChange={(e) => onType(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
-                />
-                <button className="btn !px-5" onClick={() => void send()} disabled={up.busy || (!text.trim() && !up.fileIds.length)}>{up.busy ? 'Uploading…' : 'Send'}</button>
+            {/* CR8: View-only banner for unauthorized/non-member admins in groups vs active composer */}
+            {isViewOnlyGroup ? (
+              <div className="border-t border-slate-200 p-4">
+                <div className="flex items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-semibold text-amber-800">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                  <span>You have view-only access to this group. Only group members and the creator can send messages.</span>
+                </div>
               </div>
-              <p className="mt-1 hidden text-[11px] text-slate-400 sm:block">Enter to send · Shift+Enter for a new line · drag, drop or paste files and screenshots</p>
-            </div>
+            ) : (
+              <div className="relative border-t border-slate-200 p-3">
+                {dnd.dragging && <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-accent-600 bg-accent-50/90 text-sm font-semibold text-accent-700">Drop files to attach</div>}
+                <p className="mb-1 h-4 text-xs text-slate-400" aria-live="polite">{typingNames.length ? `${typingNames.slice(0, 2).join(' and ')}${typingNames.length > 2 ? ' and others' : ''} ${typingNames.length > 1 ? 'are' : 'is'} typing…` : ''}</p>
+                {up.items.length > 0 && <div className="mb-2"><UploadChips items={up.items} onRemove={up.remove} onRetry={up.retry} /></div>}
+                <div className="flex items-end gap-2">
+                  <AttachButton onFiles={(f) => { void up.add(f).then((w) => w && setErr(w)); }} disabled={up.items.length >= 10} />
+                  <textarea
+                    ref={taRef} rows={1} value={text} maxLength={4000} placeholder={cur.type === 'DM' ? `Message ${cur.name}` : `Message #${cur.name}`} aria-label="Message"
+                    className="input max-h-40 min-h-[2.75rem] flex-1 resize-none py-2.5"
+                    onChange={(e) => onType(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
+                  />
+                  <button className="btn !px-5" onClick={() => void send()} disabled={up.busy || (!text.trim() && !up.fileIds.length)}>{up.busy ? 'Uploading…' : 'Send'}</button>
+                </div>
+                <p className="mt-1 hidden text-[11px] text-slate-400 sm:block">Enter to send · Shift+Enter for a new line · drag, drop or paste files and screenshots</p>
+              </div>
+            )}
           </>
         )}
       </section>
 
+      {/* Start conversation Modal (Workspace -> New -> Groups) */}
       <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Start a conversation">
         <div className="mb-3 flex rounded-xl border border-slate-300 bg-white p-0.5">
           {([['channel', 'Channel'], ['group', 'Group'], ['dm', 'Direct message']] as const).map(([k, label]) =>
@@ -463,7 +597,12 @@ export default function ChannelsPage() {
 
           {createTab !== 'channel' && (
             <>
-              <input className="input" type="search" placeholder="Find people…" value={contactSearch} onChange={(e) => setContactSearch(e.target.value)} aria-label="Find people" />
+              <div className="flex items-center justify-between">
+                <input className="input flex-1" type="search" placeholder="Find people…" value={contactSearch} onChange={(e) => setContactSearch(e.target.value)} aria-label="Find people" />
+              </div>
+              {createTab === 'group' && user.role === 'TEAM_LEAD' && (
+                <p className="text-[11px] text-brand-600 font-medium">Showing members from your authorized team scope.</p>
+              )}
               <div className="max-h-56 overflow-y-auto rounded-xl border border-slate-200">
                 {contacts.filter((c) => !contactSearch.trim() || c.displayName.toLowerCase().includes(contactSearch.trim().toLowerCase())).map((c) => (
                   createTab === 'dm' ? (
@@ -488,6 +627,136 @@ export default function ChannelsPage() {
           {createErr && <p className="err">{createErr}</p>}
           {createTab !== 'dm' && <button className="btn w-full" disabled={creating}>{creating ? 'Creating…' : createTab === 'group' ? 'Create group' : 'Create channel'}</button>}
         </form>
+      </Modal>
+
+      {/* CR8: Group Details & Membership Management Modal */}
+      <Modal open={groupModalOpen} onClose={() => setGroupModalOpen(false)} title={groupDetails?.isCreator ? 'Manage Group' : 'Group Information'}>
+        {groupDetails && (
+          <div className="space-y-4">
+            {groupErr && <p className="err" role="alert">{groupErr}</p>}
+
+            {!groupDetails.isCreator && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-medium text-amber-800">
+                🔒 {user.role === 'ADMIN' ? 'You have view-only access to this group as an Administrator. You cannot edit details or modify members.' : 'You are viewing this group in read-only mode.'}
+              </div>
+            )}
+
+            {groupDetails.isCreator ? (
+              <form onSubmit={saveGroupDetails} className="space-y-3">
+                <div>
+                  <label className="label">Group Name</label>
+                  <input
+                    className="input"
+                    required
+                    maxLength={80}
+                    value={groupName}
+                    onChange={(e) => setGroupName(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="label">Description (optional)</label>
+                  <textarea
+                    className="input"
+                    rows={2}
+                    maxLength={500}
+                    value={groupDesc}
+                    onChange={(e) => setGroupDesc(e.target.value)}
+                    placeholder="Add purpose or notes for this group..."
+                  />
+                </div>
+                <button className="btn w-full" disabled={groupBusy}>
+                  {groupBusy ? 'Saving...' : 'Save Group Details'}
+                </button>
+              </form>
+            ) : (
+              <div className="rounded-xl bg-slate-50 p-3 space-y-1">
+                <p className="text-xs font-semibold text-slate-500 uppercase">Group Name</p>
+                <p className="font-semibold text-ink-900">{groupDetails.name}</p>
+                {groupDetails.description && (
+                  <>
+                    <p className="text-xs font-semibold text-slate-500 uppercase pt-2">Description</p>
+                    <p className="text-sm text-slate-600">{groupDetails.description}</p>
+                  </>
+                )}
+              </div>
+            )}
+
+            <div>
+              <div className="flex items-center justify-between pb-2">
+                <p className="label !mb-0">Group Members ({groupDetails.members?.length ?? groupDetails.memberCount ?? 0})</p>
+                {groupDetails.isCreator && (
+                  <button
+                    type="button"
+                    onClick={() => setAddMembersOpen(!addMembersOpen)}
+                    className="text-xs font-semibold text-brand-600 hover:text-brand-700"
+                  >
+                    {addMembersOpen ? 'Close Add' : '+ Add Members'}
+                  </button>
+                )}
+              </div>
+
+              {groupDetails.isCreator && addMembersOpen && (
+                <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50/50 p-3 space-y-2">
+                  <p className="text-xs font-semibold text-slate-700">Select people to add:</p>
+                  <div className="max-h-40 overflow-y-auto rounded-lg border border-slate-200 bg-white">
+                    {contacts
+                      .filter((c) => !groupDetails.members?.some((m) => m.id === c.id))
+                      .map((c) => (
+                        <label key={c.id} className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-xs hover:bg-slate-50">
+                          <input
+                            type="checkbox"
+                            checked={addPicked.includes(c.id)}
+                            onChange={(e) => setAddPicked((p) => e.target.checked ? [...p, c.id] : p.filter((x) => x !== c.id))}
+                          />
+                          <Avatar userId={c.id} name={c.displayName} size={22} />
+                          <span className="min-w-0 flex-1 truncate">{c.displayName} <span className="text-[11px] text-slate-400">({c.role.toLowerCase()})</span></span>
+                        </label>
+                      ))}
+                    {contacts.filter((c) => !groupDetails.members?.some((m) => m.id === c.id)).length === 0 && (
+                      <p className="p-2 text-center text-xs text-slate-400">No additional contacts available</p>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={addGroupMembers}
+                    disabled={!addPicked.length || groupBusy}
+                    className="btn !py-1 text-xs w-full"
+                  >
+                    Add {addPicked.length} Member{addPicked.length === 1 ? '' : 's'}
+                  </button>
+                </div>
+              )}
+
+              <ul className="max-h-56 space-y-1.5 overflow-y-auto rounded-xl bg-slate-50 p-3">
+                {groupDetails.members?.map((m) => (
+                  <li key={m.id} className="flex items-center gap-2 text-sm">
+                    <Avatar userId={m.id} name={m.displayName} size={24} />
+                    <span className="font-medium text-ink-900">{m.displayName}</span>
+                    {m.id === groupDetails.createdById && (
+                      <span className="rounded bg-brand-50 px-1.5 text-[10px] font-bold uppercase text-brand-600">Creator</span>
+                    )}
+                    {m.role && (
+                      <span className="text-xs text-slate-400 capitalize">· {m.role.replace('_', ' ').toLowerCase()}</span>
+                    )}
+                    {groupDetails.isCreator && m.id !== user.id && (
+                      <button
+                        type="button"
+                        onClick={() => removeGroupMember(m.id)}
+                        disabled={groupBusy}
+                        className="ml-auto text-xs text-red-500 hover:text-red-700 font-semibold"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </li>
+                ))}
+                {(!groupDetails.members || groupDetails.members.length === 0) && (
+                  <li className="text-sm text-slate-500">No member details available.</li>
+                )}
+              </ul>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

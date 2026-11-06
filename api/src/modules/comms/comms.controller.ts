@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { RealtimeGateway } from './realtime.gateway';
 import type { Request } from 'express';
@@ -55,14 +55,24 @@ export class CommsController {
     return this.channels.totalUnread(me);
   }
 
-  
   @Get('channels/team-lead')
   getTeamLead(@CurrentUser() me: RequestUser) {
     return this.channels.myTeamLead(me);
   }
+
   @Get('channels/contacts')
   contacts(@CurrentUser() me: RequestUser) {
     return this.channels.contacts(me);
+  }
+
+  @Get('channels/:id')
+  getChannel(@CurrentUser() me: RequestUser, @Param('id') id: string) {
+    return this.channels.get(me, id);
+  }
+
+  @Patch('channels/:id/group')
+  updateGroup(@CurrentUser() me: RequestUser, @Param('id') id: string, @Body() dto: { name?: string; description?: string }) {
+    return this.channels.updateGroup(me, id, dto);
   }
 
   @Post('channels/:id/members')
