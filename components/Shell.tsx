@@ -30,7 +30,63 @@ const ICONS: Record<string, string> = {
   projects: 'M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z',
   ticket: 'M4 8a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 000 4v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2a2 2 0 000-4V8zM9 7v10',
   users: 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM19 8v6M22 11h-6',
+  briefcase: 'M20 7h-4V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2H4a2 2 0 00-2 2v10a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2zM10 5h4v2h-4V5z',
+  candidate: 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zm10-2l2 2 4-4',
+  upload: 'M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12',
+  history: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z',
+  activity: 'M13 10V3L4 14h7v7l9-11h-7z',
+  user: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z',
 };
+
+const HR_MANAGER_GROUPS: { title: string; items: { href: string; label: string; icon: string }[] }[] = [
+  {
+    title: 'Recruitment',
+    items: [
+      { href: '/hr-manager/dashboard', label: 'Dashboard', icon: 'dashboard' },
+      { href: '/hr-manager/requirements', label: 'Recruitment Requirements', icon: 'briefcase' },
+      { href: '/hr-manager/candidates', label: 'Candidates', icon: 'candidate' },
+      { href: '/hr-manager/reports', label: 'Reports', icon: 'reports' },
+    ],
+  },
+  {
+    title: 'HR Visibility',
+    items: [
+      { href: '/hr-manager/attendance', label: 'Attendance', icon: 'clock' },
+      { href: '/hr-manager/login-activity', label: 'Login Activity', icon: 'activity' },
+      { href: '/hr-manager/leaves', label: 'Leave Management', icon: 'leave' },
+    ],
+  },
+  {
+    title: 'Workspace',
+    items: [
+      { href: '/channels', label: 'Groups', icon: 'chat' },
+      { href: '/profile', label: 'Profile', icon: 'user' },
+      { href: '/hr-manager/settings', label: 'Settings', icon: 'settings' },
+    ],
+  },
+];
+
+const HR_SUPPORT_GROUPS: { title: string; items: { href: string; label: string; icon: string }[] }[] = [
+  {
+    title: 'Recruitment',
+    items: [
+      { href: '/hr-support/dashboard', label: 'Dashboard', icon: 'dashboard' },
+      { href: '/hr-support/requirements', label: 'Assigned Requirements', icon: 'briefcase' },
+      { href: '/hr-support/submissions', label: 'Candidate Submissions', icon: 'upload' },
+      { href: '/hr-support/history', label: 'Submission History', icon: 'history' },
+    ],
+  },
+  {
+    title: 'Workspace',
+    items: [
+      { href: '/channels', label: 'Groups', icon: 'chat' },
+      { href: '/reports', label: 'Daily Reports', icon: 'reports' },
+      { href: '/profile', label: 'Profile', icon: 'user' },
+      { href: '/hr-support/settings', label: 'Settings', icon: 'settings' },
+    ],
+  },
+];
+
 const GROUPS: { title: string; items: { href: string; label: string; icon: string; roles: string[] }[] }[] = [
   { title: 'Work', items: [
     { href: '/dashboard', label: 'Dashboard', icon: 'dashboard', roles: ALL },
@@ -50,7 +106,7 @@ const GROUPS: { title: string; items: { href: string; label: string; icon: strin
   { title: 'Manage', items: [
     { href: '/teams', label: 'Teams', icon: 'teams', roles: ['ADMIN', 'TEAM_LEAD', 'COORDINATOR'] },
     { href: '/users', label: 'People', icon: 'users', roles: ['ADMIN', 'TEAM_LEAD'] },
-    { href: '/settings', label: 'Settings', icon: 'settings', roles: ['ADMIN'] },
+    { href: '/settings', label: 'Settings', icon: 'settings', roles: ALL },
     { href: '/audit', label: 'Audit log', icon: 'audit', roles: ['ADMIN'] },
   ] },
 ];
@@ -75,13 +131,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
       </div>
       <p className="mx-5 mt-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-white/50">TeamFlow</p>
       <nav className="mt-3 flex-1 space-y-5 overflow-y-auto px-3 pb-4">
-        {GROUPS.map((g) => {
-          const items = g.items.filter((i) => i.roles.includes(user.role));
-          if (!items.length) return null;
+        {((user.role === 'HR_MANAGER' ? HR_MANAGER_GROUPS : user.role === 'HR_SUPPORT' ? HR_SUPPORT_GROUPS : GROUPS.map(g => ({ title: g.title, items: g.items.filter((i: any) => i.roles.includes(user.role)) })).filter(g => g.items.length > 0)) as any[]).map((g) => {
+          const items = g.items;
+          if (!items || !items.length) return null;
           return (
             <div key={g.title}>
               <p className="mb-1 px-3 text-[10px] font-semibold uppercase tracking-widest text-white/40">{g.title}</p>
-              {items.map((i) => {
+              {items.map((i: any) => {
                 const active = path === i.href || path.startsWith(i.href + '/');
                 return (
                   <Link key={i.href} href={i.href} className={`group flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition ${active ? 'bg-brand-600 text-white shadow-lg shadow-brand-600/20' : 'text-white/70 hover:bg-white/10 hover:text-white'}`}>

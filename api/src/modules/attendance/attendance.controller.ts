@@ -41,7 +41,7 @@ export class AttendanceController {
     return this.att.mine(me, { month });
   }
 
-  @Roles('ADMIN', 'TEAM_LEAD', 'COORDINATOR')
+  @Roles('ADMIN', 'TEAM_LEAD', 'COORDINATOR', 'HR_MANAGER')
   @Get('board')
   board(@CurrentUser() me: RequestUser, @Query('date') date?: string, @Query('teamId') teamId?: string, @Query('batchId') batchId?: string) {
     return this.att.board(me, { date, teamId, batchId });

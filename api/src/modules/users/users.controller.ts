@@ -15,6 +15,16 @@ export class UsersController {
     return this.users.list(me, q);
   }
 
+  @Get('preferences/me')
+  getPreferences(@CurrentUser() me: RequestUser) {
+    return this.users.getPreferences(me.id);
+  }
+
+  @Patch('preferences/me')
+  updatePreferences(@CurrentUser() me: RequestUser, @Body() data: any) {
+    return this.users.updatePreferences(me.id, data);
+  }
+
   @Get(':id')
   get(@CurrentUser() me: RequestUser, @Param('id') id: string) {
     return this.users.get(me, id);

@@ -106,7 +106,7 @@ export interface SessionUser {
   id: string;
   email: string;
   displayName: string;
-  role: 'ADMIN' | 'TEAM_LEAD' | 'COORDINATOR' | 'EMPLOYEE';
+  role: 'ADMIN' | 'TEAM_LEAD' | 'COORDINATOR' | 'EMPLOYEE' | 'HR_MANAGER' | 'HR_SUPPORT';
   teamId: string | null;
   batchId: string | null;
   mustChangePassword: boolean;
@@ -132,8 +132,49 @@ export const PRIORITY_COLORS: Record<string, string> = {
   URGENT: 'bg-red-50 text-red-700',
 };
 
+export const CANDIDATE_STATUS_COLORS: Record<string, string> = {
+  SUBMITTED: 'bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200',
+  UNDER_REVIEW: 'bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200',
+  SHORTLISTED: 'bg-purple-50 text-purple-700 ring-1 ring-inset ring-purple-200',
+  INTERVIEW_SCHEDULED: 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200',
+  SELECTED: 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200',
+  REJECTED: 'bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200',
+  ON_HOLD: 'bg-zinc-100 text-zinc-700 ring-1 ring-inset ring-zinc-200',
+};
+
+export const CANDIDATE_STATUS_LABEL: Record<string, string> = {
+  SUBMITTED: 'Submitted',
+  UNDER_REVIEW: 'Under Review',
+  SHORTLISTED: 'Shortlisted',
+  INTERVIEW_SCHEDULED: 'Interview Scheduled',
+  SELECTED: 'Selected',
+  REJECTED: 'Rejected',
+  ON_HOLD: 'On Hold',
+};
+
+export const REQ_STATUS_COLORS: Record<string, string> = {
+  DRAFT: 'bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200',
+  OPEN: 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200',
+  IN_PROGRESS: 'bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200',
+  ON_HOLD: 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200',
+  CLOSED: 'bg-zinc-100 text-zinc-700 ring-1 ring-inset ring-zinc-200',
+};
+
+export const REQ_STATUS_LABEL: Record<string, string> = {
+  DRAFT: 'Draft',
+  OPEN: 'Open',
+  IN_PROGRESS: 'In Progress',
+  ON_HOLD: 'On Hold',
+  CLOSED: 'Closed',
+};
+
 export const ROLE_LABEL: Record<string, string> = {
-  ADMIN: 'Admin', TEAM_LEAD: 'Team Lead', COORDINATOR: 'Coordinator', EMPLOYEE: 'Employee',
+  ADMIN: 'Admin',
+  TEAM_LEAD: 'Team Lead',
+  COORDINATOR: 'Coordinator',
+  EMPLOYEE: 'Employee',
+  HR_MANAGER: 'HR Manager',
+  HR_SUPPORT: 'HR Support',
 };
 
 export function initials(name: string): string {

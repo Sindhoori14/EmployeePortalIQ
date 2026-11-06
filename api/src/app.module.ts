@@ -24,6 +24,7 @@ import { FilesModule } from './modules/files/files.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { WorkplaceModule } from './modules/workplace/workplace.module';
+import { RecruitmentModule } from './modules/recruitment/recruitment.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { WorkplaceModule } from './modules/workplace/workplace.module';
     JobsModule,
     AdminModule,
     WorkplaceModule,
+    RecruitmentModule,
   ],
   providers: [
     // Order matters: authenticate first, then rate-limit per user, then check roles.

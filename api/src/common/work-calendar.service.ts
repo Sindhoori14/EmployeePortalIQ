@@ -13,7 +13,7 @@ export interface ReportGateConfig {
   roles: string[];
 }
 
-const ALL_ROLES = ['ADMIN', 'TEAM_LEAD', 'COORDINATOR', 'EMPLOYEE'];
+const ALL_ROLES = ['ADMIN', 'TEAM_LEAD', 'COORDINATOR', 'EMPLOYEE', 'HR_MANAGER', 'HR_SUPPORT'];
 const DEFAULT_GATE_ROLES = ['EMPLOYEE', 'COORDINATOR', 'TEAM_LEAD'];
 
 /** Working days, holidays and the daily report deadline (all editable by admin in Settings). */

@@ -2,6 +2,7 @@ import {
   BadRequestException,
   HttpException,
   Injectable,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -161,6 +162,9 @@ export class AuthService {
     await this.prisma.refreshToken
       .update({ where: { tokenHash: sha256(rawRefresh) }, data: { revokedAt: new Date() } })
       .catch(() => null);
+    if (userId) {
+      await this.audit.log({ actorId: userId, action: 'LOGOUT', entity: 'user', entityId: userId }).catch(() => null);
+    }
   }
 
   async changePassword(userId: string, current: string, next: string, ip?: string) {
@@ -204,6 +208,61 @@ export class AuthService {
         await this.audit.log({ actorId: user.id, action: 'PASSWORD_RESET_REQUESTED', entity: 'user', entityId: user.id, ip });
       }
     }
+    return { ok: true };
+  }
+
+  async getSessions(userId: string, currentRefresh?: string) {
+    const curHash = currentRefresh ? sha256(currentRefresh) : null;
+    const tokens = await this.prisma.refreshToken.findMany({
+      where: {
+        userId,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        tokenHash: true,
+        ip: true,
+        userAgent: true,
+        createdAt: true,
+        expiresAt: true,
+      },
+    });
+    return tokens.map((t) => ({
+      id: t.id,
+      ip: t.ip || 'Unknown IP',
+      userAgent: t.userAgent || 'Unknown Device',
+      createdAt: t.createdAt,
+      expiresAt: t.expiresAt,
+      isCurrent: curHash ? t.tokenHash === curHash : false,
+    }));
+  }
+
+  async revokeSession(userId: string, sessionId: string) {
+    const session = await this.prisma.refreshToken.findUnique({
+      where: { id: sessionId },
+    });
+    if (!session || session.userId !== userId) {
+      throw new NotFoundException('Session not found');
+    }
+    await this.prisma.refreshToken.update({
+      where: { id: sessionId },
+      data: { revokedAt: new Date() },
+    });
+    return { ok: true };
+  }
+
+  async revokeAllOtherSessions(userId: string, currentRefresh?: string) {
+    const curHash = currentRefresh ? sha256(currentRefresh) : null;
+    await this.prisma.refreshToken.updateMany({
+      where: {
+        userId,
+        revokedAt: null,
+        ...(curHash ? { tokenHash: { not: curHash } } : {}),
+      },
+      data: { revokedAt: new Date() },
+    });
     return { ok: true };
   }
 

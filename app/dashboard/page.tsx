@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { api } from '../../lib/api';
 import { useRequireAuth } from '../../lib/auth-context';
 import { Avatar, Donut, Empty, Loading, PageHeader, ProgressBar, Stat } from '../../components/ui';
@@ -24,11 +25,24 @@ function greet() {
 
 export default function DashboardPage() {
   const { user, loading } = useRequireAuth();
+  const router = useRouter();
   const att = useMyAttendance();
   const [me, setMe] = useState<Me | null>(null);
   const [extra, setExtra] = useState<any>(null);
   const [err, setErr] = useState('');
   const [allTeams, setAllTeams] = useState(false);
+
+  useEffect(() => {
+    if (!user) return;
+    if (user.role === 'HR_MANAGER') {
+      router.replace('/hr-manager/dashboard');
+      return;
+    }
+    if (user.role === 'HR_SUPPORT') {
+      router.replace('/hr-support/dashboard');
+      return;
+    }
+  }, [user, router]);
 
   useEffect(() => {
     if (!user) return;

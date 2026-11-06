@@ -20,8 +20,8 @@ export class CreateUserDto {
   @MaxLength(120)
   displayName!: string;
 
-  @IsIn(['ADMIN', 'TEAM_LEAD', 'COORDINATOR', 'EMPLOYEE'])
-  role!: 'ADMIN' | 'TEAM_LEAD' | 'COORDINATOR' | 'EMPLOYEE';
+  @IsIn(['ADMIN', 'TEAM_LEAD', 'COORDINATOR', 'EMPLOYEE', 'HR_MANAGER', 'HR_SUPPORT'])
+  role!: 'ADMIN' | 'TEAM_LEAD' | 'COORDINATOR' | 'EMPLOYEE' | 'HR_MANAGER' | 'HR_SUPPORT';
 
   @IsOptional()
   @IsString()
@@ -40,8 +40,8 @@ export class UpdateUserDto {
   displayName?: string;
 
   @IsOptional()
-  @IsIn(['ADMIN', 'TEAM_LEAD', 'COORDINATOR', 'EMPLOYEE'])
-  role?: 'ADMIN' | 'TEAM_LEAD' | 'COORDINATOR' | 'EMPLOYEE';
+  @IsIn(['ADMIN', 'TEAM_LEAD', 'COORDINATOR', 'EMPLOYEE', 'HR_MANAGER', 'HR_SUPPORT'])
+  role?: 'ADMIN' | 'TEAM_LEAD' | 'COORDINATOR' | 'EMPLOYEE' | 'HR_MANAGER' | 'HR_SUPPORT';
 
   @IsOptional()
   @IsString()
@@ -74,7 +74,7 @@ export class ListUsersQuery {
   teamId?: string;
 
   @IsOptional()
-  @IsIn(['ADMIN', 'TEAM_LEAD', 'COORDINATOR', 'EMPLOYEE'])
+  @IsIn(['ADMIN', 'TEAM_LEAD', 'COORDINATOR', 'EMPLOYEE', 'HR_MANAGER', 'HR_SUPPORT'])
   role?: string;
 
   @IsOptional()
@@ -103,8 +103,8 @@ export class BulkUserRow {
   displayName!: string;
 
   @IsOptional()
-  @IsIn(['TEAM_LEAD', 'COORDINATOR', 'EMPLOYEE'])
-  role?: 'TEAM_LEAD' | 'COORDINATOR' | 'EMPLOYEE';
+  @IsIn(['TEAM_LEAD', 'COORDINATOR', 'EMPLOYEE', 'HR_MANAGER', 'HR_SUPPORT'])
+  role?: 'TEAM_LEAD' | 'COORDINATOR' | 'EMPLOYEE' | 'HR_MANAGER' | 'HR_SUPPORT';
 
   /** Team / batch referenced by NAME so a spreadsheet can be pasted straight in. */
   @IsOptional() @IsString() @MaxLength(120) team?: string;

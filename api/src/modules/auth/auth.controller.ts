@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Req, Res } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { AuthService, authCookies, clearAuthCookies } from './auth.service';
@@ -55,6 +55,23 @@ export class AuthController {
   async change(@CurrentUser() u: RequestUser, @Body() dto: ChangePasswordDto, @Req() req: Request) {
     await this.auth.changePassword(u.id, dto.currentPassword, dto.newPassword, this.ip(req));
     return { ok: true };
+  }
+
+  @Get('sessions')
+  sessions(@CurrentUser() u: RequestUser, @Req() req: Request) {
+    const rawRefresh = (req as any).cookies?.['refresh'];
+    return this.auth.getSessions(u.id, rawRefresh);
+  }
+
+  @Delete('sessions/:id')
+  revokeSession(@CurrentUser() u: RequestUser, @Param('id') id: string) {
+    return this.auth.revokeSession(u.id, id);
+  }
+
+  @Post('sessions/revoke-all')
+  revokeAllSessions(@CurrentUser() u: RequestUser, @Req() req: Request) {
+    const rawRefresh = (req as any).cookies?.['refresh'];
+    return this.auth.revokeAllOtherSessions(u.id, rawRefresh);
   }
 
   @Public()

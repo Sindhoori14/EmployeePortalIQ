@@ -145,7 +145,7 @@ export class WorkplaceService {
   }
 
   async pending(me: RequestUser) {
-    if (!['ADMIN', 'TEAM_LEAD', 'COORDINATOR'].includes(me.role)) throw new ForbiddenException('Forbidden');
+    if (!['ADMIN', 'TEAM_LEAD', 'COORDINATOR', 'HR_MANAGER'].includes(me.role)) throw new ForbiddenException('Forbidden');
     const where: any = {};
 
     if (me.role === 'TEAM_LEAD') {
@@ -157,7 +157,7 @@ export class WorkplaceService {
       if (!me.teamId) return [];
       where.teamId = me.teamId;
       where.status = { in: ['PENDING', 'TL_APPROVED'] };
-    } else if (me.role === 'ADMIN') {
+    } else if (me.role === 'ADMIN' || me.role === 'HR_MANAGER') {
       where.status = { in: ['TL_APPROVED', 'PENDING'] };
     }
 
@@ -287,7 +287,7 @@ export class WorkplaceService {
 
   onLeaveToday(me: RequestUser) {
     const where: any = {};
-    if (me.role !== 'ADMIN') {
+    if (me.role !== 'ADMIN' && me.role !== 'HR_MANAGER') {
       if (!me.teamId) return Promise.resolve([]);
       where.teamId = me.teamId;
     }
@@ -329,7 +329,7 @@ export class WorkplaceService {
       startDate: { lt: nextMonth },
       endDate: { gte: monthStart },
     };
-    if (me.role !== 'ADMIN') {
+    if (me.role !== 'ADMIN' && me.role !== 'HR_MANAGER') {
       eventWhere.OR = [
         { audience: { in: ['ALL_EMPLOYEES', 'ALL_TEAMS'] } },
         ...(me.teamId ? [{ audience: 'SPECIFIC_TEAM', teamId: me.teamId }] : []),
@@ -601,12 +601,12 @@ export class WorkplaceService {
 
   // ---------------- Leave History (CR3) ----------------
   async history(me: RequestUser, query?: { teamId?: string; status?: string; limit?: number }) {
-    if (!['ADMIN', 'TEAM_LEAD', 'COORDINATOR'].includes(me.role)) throw new ForbiddenException('Forbidden');
+    if (!['ADMIN', 'TEAM_LEAD', 'COORDINATOR', 'HR_MANAGER'].includes(me.role)) throw new ForbiddenException('Forbidden');
     const where: any = {};
     if (me.role === 'TEAM_LEAD' || me.role === 'COORDINATOR') {
       if (!me.teamId) return [];
       where.teamId = me.teamId;
-    } else if (me.role === 'ADMIN') {
+    } else if (me.role === 'ADMIN' || me.role === 'HR_MANAGER') {
       if (query?.teamId) where.teamId = query.teamId;
     }
     if (query?.status) {

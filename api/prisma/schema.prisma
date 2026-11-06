@@ -20,6 +20,8 @@ enum Role {
   TEAM_LEAD
   COORDINATOR
   EMPLOYEE
+  HR_MANAGER
+  HR_SUPPORT
 }
 
 enum TaskStatus {
@@ -118,6 +120,7 @@ enum NotificationType {
   ATTENTION
   SYSTEM
   TICKET
+  RECRUITMENT
 }
 
 enum Readiness {
@@ -194,10 +197,18 @@ model User {
   resolvedTickets      Ticket[]         @relation("TicketResolver")
   ticketMessages       TicketMessage[]
 
+  // Recruitment relations
+  requirementsCreated    RecruitmentRequirement[] @relation("RequirementCreator")
+  requirementAssignments RequirementAssignment[]  @relation("HrSupportAssignments")
+  requirementAssignedBy  RequirementAssignment[]  @relation("RequirementAssigner")
+  candidatesSubmitted    Candidate[]              @relation("CandidateSubmitter")
+  candidateStatusChanges CandidateStatusHistory[] @relation("CandidateStatusChanger")
+
   notifications   Notification[]
   refreshTokens   RefreshToken[]
   auditLogs       AuditLog[]
   settingsUpdated Setting[]      @relation("SettingUpdater")
+  preference      UserPreference? @relation("UserPreferences")
 
   evaluationsReceived BatchEvaluation[] @relation("EvalTrainee")
   evaluationsGiven    BatchEvaluation[] @relation("EvalEvaluator")
@@ -1062,5 +1073,164 @@ model CalendarEvent {
   @@index([teamId])
   @@index([type])
   @@map("calendar_events")
+}
+
+// ---------- Recruitment Module (HR Manager & HR Support) ----------
+
+enum RequirementStatus {
+  DRAFT
+  OPEN
+  IN_PROGRESS
+  ON_HOLD
+  CLOSED
+}
+
+enum CandidateStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  SHORTLISTED
+  INTERVIEW_SCHEDULED
+  SELECTED
+  REJECTED
+  ON_HOLD
+}
+
+model RecruitmentRequirement {
+  id                     String            @id @default(cuid())
+  reqCode                String            @unique @db.VarChar(50)
+  title                  String            @db.VarChar(200)
+  department             String            @db.VarChar(100)
+  vacancies              Int               @default(1)
+  location               String            @db.VarChar(100)
+  employmentType         String            @default("Full-time") @db.VarChar(50)
+  priority               String            @default("MEDIUM") @db.VarChar(20)
+  creationMethod         String            @default("MANUAL") @db.VarChar(50)
+  jdFileId               String?           @db.VarChar(100)
+  jdFileName             String?           @db.VarChar(255)
+  jdFileSize             Int?
+  jdFilePath             String?           @db.VarChar(500)
+  jdMimeType             String?           @db.VarChar(120)
+  qualification          String?           @db.VarChar(200)
+  specialization         String?           @db.VarChar(200)
+  minExp                 Float             @default(0)
+  maxExp                 Float             @default(0)
+  techSkills             String?           @db.Text
+  softSkills             String?           @db.Text
+  certifications         String?           @db.Text
+  description            String?           @db.Text
+  responsibilities       String?           @db.Text
+  requiredSkills         String?           @db.Text
+  preferredSkills        String?           @db.Text
+  additionalInstructions String?           @db.Text
+  salaryRange            String?           @db.VarChar(100)
+  expectedJoiningDate    DateTime?         @db.Date
+  deadline               DateTime?         @db.Date
+  status                 RequirementStatus @default(OPEN)
+  createdById            String
+  createdAt              DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt              DateTime          @updatedAt @db.Timestamptz(6)
+
+  createdBy   User                    @relation("RequirementCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  assignments RequirementAssignment[]
+  candidates  Candidate[]
+
+  @@index([status, createdAt])
+  @@index([createdById])
+  @@map("recruitment_requirements")
+}
+
+model RequirementAssignment {
+  id            String   @id @default(cuid())
+  requirementId String
+  hrSupportId   String
+  assignedById  String
+  assignedAt    DateTime @default(now()) @db.Timestamptz(6)
+  status        String   @default("ACTIVE") @db.VarChar(50)
+
+  requirement RecruitmentRequirement @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+  hrSupport   User                   @relation("HrSupportAssignments", fields: [hrSupportId], references: [id], onDelete: Cascade)
+  assignedBy  User                   @relation("RequirementAssigner", fields: [assignedById], references: [id], onDelete: Cascade)
+
+  @@unique([requirementId, hrSupportId])
+  @@index([hrSupportId, status])
+  @@index([requirementId])
+  @@map("requirement_assignments")
+}
+
+model Candidate {
+  id                String          @id @default(cuid())
+  candidateCode     String          @unique @db.VarChar(50)
+  requirementId     String
+  submittedById     String
+  name              String          @db.VarChar(200)
+  email             String          @db.VarChar(255)
+  phone             String          @db.VarChar(50)
+  normalizedEmail   String          @db.VarChar(255)
+  normalizedPhone   String          @db.VarChar(50)
+  qualification     String          @db.VarChar(200)
+  specialization    String?         @db.VarChar(200)
+  college           String?         @db.VarChar(200)
+  graduationYear    Int?
+  totalExp          Float           @default(0)
+  relevantExp       Float           @default(0)
+  techSkills        String          @db.Text
+  softSkills        String?         @db.Text
+  currentLocation   String          @db.VarChar(100)
+  preferredLocation String?         @db.VarChar(100)
+  currentCtc        String?         @db.VarChar(100)
+  expectedCtc       String?         @db.VarChar(100)
+  noticePeriod      String?         @db.VarChar(100)
+  resumeLink        String?         @db.VarChar(1000)
+  source            String?         @db.VarChar(100)
+  hrRemarks         String?         @db.Text
+  status            CandidateStatus @default(SUBMITTED)
+  interviewDate     DateTime?       @db.Timestamptz(6)
+  createdAt         DateTime        @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime        @updatedAt @db.Timestamptz(6)
+
+  requirement RecruitmentRequirement   @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+  submittedBy User                     @relation("CandidateSubmitter", fields: [submittedById], references: [id], onDelete: Restrict)
+  history     CandidateStatusHistory[]
+
+  @@index([requirementId, status])
+  @@index([submittedById])
+  @@index([requirementId, normalizedEmail])
+  @@index([requirementId, normalizedPhone])
+  @@map("candidates")
+}
+
+model CandidateStatusHistory {
+  id                String           @id @default(cuid())
+  candidateId       String
+  previousStatus    CandidateStatus?
+  newStatus         CandidateStatus
+  changedById       String
+  remarks           String?          @db.Text
+  interviewFeedback String?          @db.Text
+  internalNotes     String?          @db.Text
+  nextAction        String?          @db.VarChar(255)
+  interviewDate     DateTime?        @db.Timestamptz(6)
+  createdAt         DateTime         @default(now()) @db.Timestamptz(6)
+
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  changedBy User      @relation("CandidateStatusChanger", fields: [changedById], references: [id], onDelete: Restrict)
+
+  @@index([candidateId, createdAt])
+  @@map("candidate_status_history")
+}
+
+model UserPreference {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  notifications Json?
+  recruitment   Json?
+  work          Json?
+  appearance    Json?
+  createdAt     DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @db.Timestamptz(6)
+
+  user          User     @relation("UserPreferences", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_preferences")
 }
 

@@ -75,19 +75,19 @@ export class WorkplaceController {
     return this.work.mine(me);
   }
 
-  @Roles('ADMIN', 'TEAM_LEAD', 'COORDINATOR')
+  @Roles('ADMIN', 'TEAM_LEAD', 'COORDINATOR', 'HR_MANAGER')
   @Get('leaves/pending')
   pending(@CurrentUser() me: RequestUser) {
     return this.work.pending(me);
   }
 
-  @Roles('ADMIN', 'TEAM_LEAD', 'COORDINATOR')
+  @Roles('ADMIN', 'TEAM_LEAD', 'COORDINATOR', 'HR_MANAGER')
   @Get('leaves/history')
   history(@CurrentUser() me: RequestUser, @Query('teamId') teamId?: string, @Query('status') status?: string, @Query('limit') limit?: string) {
     return this.work.history(me, { teamId, status, limit: limit ? Number(limit) : undefined });
   }
 
-  @Roles('ADMIN', 'TEAM_LEAD', 'COORDINATOR')
+  @Roles('ADMIN', 'TEAM_LEAD', 'COORDINATOR', 'HR_MANAGER')
   @Get('leaves/on-leave-today')
   onLeaveToday(@CurrentUser() me: RequestUser) {
     return this.work.onLeaveToday(me);

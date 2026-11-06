@@ -8,9 +8,6 @@ out/
 tsconfig.tsbuildinfo
 .DS_Store
 
-
 api/dist/
-
-api/dist/
-
-api/dist/
+api/uploads/
+scratch/

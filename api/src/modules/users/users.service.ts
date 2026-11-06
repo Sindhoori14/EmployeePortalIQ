@@ -230,6 +230,103 @@ export class UsersService {
     if (kickSockets) this.gateway.disconnectUser(userId);
   }
 
+  async getPreferences(userId: string) {
+    let pref = await this.prisma.userPreference.findUnique({
+      where: { userId },
+    });
+    if (!pref) {
+      pref = await this.prisma.userPreference.create({
+        data: {
+          userId,
+          notifications: {
+            newCandidateSubmissions: true,
+            candidateStatusChanges: true,
+            candidateFeedback: true,
+            newRequirements: true,
+            deadlineReminders: true,
+            interviewSchedules: true,
+            attendanceSummary: true,
+            lateLoginAlerts: true,
+            leaveUpdates: true,
+          },
+          recruitment: {
+            defaultJobLocation: 'Remote',
+            defaultEmploymentType: 'Full-time',
+            defaultDeadlineDuration: '14 days',
+            defaultCandidateStatus: 'SUBMITTED',
+            visibleColumns: [
+              'candidateCode',
+              'name',
+              'email',
+              'phone',
+              'qualification',
+              'totalExp',
+              'status',
+              'submittedBy',
+              'createdAt',
+              'actions',
+            ],
+          },
+          work: {
+            dateFormat: 'DD/MM/YYYY',
+            timeZone: 'Asia/Kolkata',
+            workingHoursDisplay: '12h',
+          },
+          appearance: {
+            theme: 'light',
+            viewDensity: 'comfortable',
+          },
+        },
+      });
+    }
+    return pref;
+  }
+
+  async updatePreferences(
+    userId: string,
+    data: { notifications?: any; recruitment?: any; work?: any; appearance?: any },
+  ) {
+    const existing = await this.getPreferences(userId);
+    const updated = await this.prisma.userPreference.update({
+      where: { userId },
+      data: {
+        ...(data.notifications
+          ? {
+              notifications: {
+                ...((existing.notifications as object) || {}),
+                ...data.notifications,
+              },
+            }
+          : {}),
+        ...(data.recruitment
+          ? {
+              recruitment: {
+                ...((existing.recruitment as object) || {}),
+                ...data.recruitment,
+              },
+            }
+          : {}),
+        ...(data.work
+          ? {
+              work: {
+                ...((existing.work as object) || {}),
+                ...data.work,
+              },
+            }
+          : {}),
+        ...(data.appearance
+          ? {
+              appearance: {
+                ...((existing.appearance as object) || {}),
+                ...data.appearance,
+              },
+            }
+          : {}),
+      },
+    });
+    return updated;
+  }
+
   private safe(u: any) {
     if (!u) return u;
     const { passwordHash: _p, ...rest } = u;

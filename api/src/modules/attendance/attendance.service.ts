@@ -179,12 +179,12 @@ export class AttendanceService {
   // =====================================================================
   private scopeWhere(me: RequestUser, f: { teamId?: string; batchId?: string; userId?: string }) {
     const where: any = {};
-    if (me.role === 'ADMIN') {
+    if (me.role === 'ADMIN' || me.role === 'HR_MANAGER') {
       if (f.teamId) where.teamId = f.teamId === 'none' ? null : f.teamId;
     } else if (me.role === 'TEAM_LEAD' || me.role === 'COORDINATOR') {
       where.teamId = me.teamId ?? '__none__'; // staff see their own team only; ?teamId= cannot widen it
     } else {
-      where.id = me.id; // employees: themselves only
+      where.id = me.id; // employees & hr support: themselves only
     }
     if (f.batchId) where.batchId = f.batchId;
     if (f.userId) where.id = f.userId;
@@ -192,8 +192,8 @@ export class AttendanceService {
   }
 
   private async assertCanSee(me: RequestUser, userId: string) {
-    if (me.id === userId || me.role === 'ADMIN') return;
-    if (me.role === 'EMPLOYEE') throw new ForbiddenException('You can only see your own attendance');
+    if (me.id === userId || me.role === 'ADMIN' || me.role === 'HR_MANAGER') return;
+    if (me.role === 'EMPLOYEE' || me.role === 'HR_SUPPORT') throw new ForbiddenException('You can only see your own attendance');
     const t = await this.prisma.user.findUnique({ where: { id: userId }, select: { teamId: true } });
     if (!t) throw new NotFoundException('User not found');
     if (!me.teamId || t.teamId !== me.teamId) throw new ForbiddenException('That person is not in your team');
@@ -275,7 +275,7 @@ export class AttendanceService {
   //  Live board (admin / lead / coordinator)
   // =====================================================================
   async board(me: RequestUser, q: { date?: string; teamId?: string; batchId?: string }) {
-    if (me.role === 'EMPLOYEE') throw new ForbiddenException('Forbidden');
+    if (me.role === 'EMPLOYEE' || me.role === 'HR_SUPPORT') throw new ForbiddenException('Forbidden');
     const date = q.date ?? dayStr();
     if (!isValidDay(date)) throw new BadRequestException('date must be YYYY-MM-DD');
     if (date > dayStr()) throw new BadRequestException('Cannot view a future date');
@@ -446,7 +446,8 @@ export class AttendanceService {
   }
 
   async export(me: RequestUser, q: { type?: string; date?: string; month?: string; from?: string; to?: string; userId?: string; teamId?: string; batchId?: string; format?: string }) {
-    const type = q.type ?? 'day';
+    const rawType = q.type ?? 'day';
+    const type = rawType === 'daily' ? 'day' : rawType;
     const csv = q.format === 'csv';
     let sheets: Sheet[];
     let filename: string;
