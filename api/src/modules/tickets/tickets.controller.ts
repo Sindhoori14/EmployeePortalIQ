@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { CurrentUser, RequestUser } from '../../common/decorators/current-user.decorator';
 import { TicketsService } from './tickets.service';
@@ -31,5 +31,10 @@ export class TicketsController {
   @Post(':id/messages')
   addMessage(@CurrentUser() me: RequestUser, @Param('id') id: string, @Body() dto: AddTicketMessageDto) {
     return this.tickets.addMessage(me, id, dto);
+  }
+
+  @Delete(':id')
+  delete(@CurrentUser() me: RequestUser, @Param('id') id: string, @Req() req: Request) {
+    return this.tickets.delete(me, id, req.ip);
   }
 }

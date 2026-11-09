@@ -85,8 +85,20 @@ export default function ReportsPage() {
 
   // Staff Monitoring & Status States
   const [selectedDate, setSelectedDate] = useState(today);
+  const [dateFilterMode, setDateFilterMode] = useState<'day' | 'week' | 'month' | 'custom'>('day');
+  const [customFrom, setCustomFrom] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    return localDay(d);
+  });
+  const [customTo, setCustomTo] = useState(today);
+
+  // Audience State
+  const [selectedAudience, setSelectedAudience] = useState<'ALL' | 'TEAM' | 'TEAM_LEADS' | 'INDIVIDUAL'>('ALL');
   const [selectedTeam, setSelectedTeam] = useState<string>('ALL');
   const [selectedEmployee, setSelectedEmployee] = useState<string>('ALL');
+  const [includeLeadReports, setIncludeLeadReports] = useState(true);
+  const [allStaffMembers, setAllStaffMembers] = useState<StatusUser[]>([]);
   const [search, setSearch] = useState('');
   const [teams, setTeams] = useState<TeamOption[]>([]);
   const [status, setStatus] = useState<ReportStatusResponse | null>(null);
@@ -111,27 +123,72 @@ export default function ReportsPage() {
   }, []);
 
   // Load Staff Status & Reports List
+  // Calculate date boundaries
+  const getDateRange = useCallback(() => {
+    const now = new Date();
+    if (dateFilterMode === 'day') {
+      return { from: selectedDate, to: selectedDate };
+    }
+    if (dateFilterMode === 'week') {
+      const dayOfWeek = now.getDay() || 7; // Monday = 1
+      const mon = new Date(now);
+      mon.setDate(now.getDate() - dayOfWeek + 1);
+      return { from: localDay(mon), to: localDay(now) };
+    }
+    if (dateFilterMode === 'month') {
+      const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+      return { from: localDay(firstDay), to: localDay(now) };
+    }
+    return { from: customFrom || selectedDate, to: customTo || selectedDate };
+  }, [dateFilterMode, selectedDate, customFrom, customTo]);
+
+  // Load Staff Status & Reports List
   const loadStaffData = useCallback(async () => {
     if (!isStaff) return;
     setFetchingStaff(true);
     setErr('');
     try {
-      const teamParam = isAdmin && selectedTeam !== 'ALL' ? `&teamId=${selectedTeam}` : '';
-      const [sRes, rList, teamList] = await Promise.all([
-        api<ReportStatusResponse>(`/daily-reports/status?date=${selectedDate}${teamParam}`),
-        api<DailyReport[]>(`/daily-reports?date=${selectedDate}${teamParam}`),
-        isAdmin ? api<{ data: TeamOption[] }>('/teams?limit=100').then((r) => r.data || []).catch(() => []) : Promise.resolve([]),
+      const { from, to } = getDateRange();
+      const isSingleDay = from === to;
+
+      let teamParam = '';
+      if (isAdmin) {
+        if (selectedAudience === 'TEAM' && selectedTeam !== 'ALL') teamParam = `&teamId=${selectedTeam}`;
+      } else if (isLead && user?.teamId) {
+        teamParam = `&teamId=${user.teamId}`;
+      }
+
+      let empParam = '';
+      if (selectedAudience === 'INDIVIDUAL' && selectedEmployee !== 'ALL') {
+        empParam = `&employeeId=${selectedEmployee}`;
+      }
+
+      let roleParam = '';
+      if (isAdmin && selectedAudience === 'TEAM_LEADS') {
+        roleParam = '&role=TEAM_LEAD';
+      }
+
+      const queryParams = isSingleDay
+        ? `date=${from}${teamParam}${empParam}${roleParam}`
+        : `from=${from}&to=${to}${teamParam}${empParam}${roleParam}`;
+
+      const [sRes, rList, teamList, staffUsers] = await Promise.all([
+        api<ReportStatusResponse>(`/daily-reports/status?${isSingleDay ? queryParams : `date=${to}${teamParam}${roleParam}`}`).catch(() => null),
+        api<DailyReport[]>(`/daily-reports?${queryParams}`).catch(() => []),
+        isAdmin ? api<any>('/teams?limit=100').then((r) => (Array.isArray(r) ? r : r?.data || [])).catch(() => []) : Promise.resolve([]),
+        api<any>('/users?limit=200').then((r) => (Array.isArray(r) ? r : r?.data || [])).catch(() => []),
       ]);
 
-      setStatus(sRes);
-      setReportsList(rList);
-      if (isAdmin && teamList.length) setTeams(teamList);
+      if (sRes) setStatus(sRes);
+      setReportsList(Array.isArray(rList) ? rList : []);
+      if (isAdmin && Array.isArray(teamList) && teamList.length) setTeams(teamList);
+      if (Array.isArray(staffUsers)) setAllStaffMembers(staffUsers);
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'Failed to load report status');
     } finally {
       setFetchingStaff(false);
     }
-  }, [isStaff, isAdmin, selectedDate, selectedTeam]);
+  }, [isStaff, isAdmin, isLead, user, getDateRange, selectedAudience, selectedTeam, selectedEmployee]);
 
   useEffect(() => {
     if (!user) return;
@@ -248,6 +305,62 @@ export default function ReportsPage() {
   const submittedToday = mine.some((r) => dayOnly(r.reportDate) === today);
   const minDay = localDay(new Date(Date.now() - 14 * 86_400_000));
 
+  // Export / Download Reports to CSV
+  function downloadReportsCSV() {
+    if (!reportsList.length) {
+      alert('No reports found to download for the current filters.');
+      return;
+    }
+
+    const { from, to } = getDateRange();
+    const headers = [
+      'Report Date',
+      'Employee Name',
+      'Email',
+      'Role',
+      'Team',
+      'Hours Worked',
+      'Tasks Done',
+      'Accomplishments (Did Today)',
+      'Blockers',
+      'Plan Tomorrow',
+      'Submission Time',
+      'Status',
+    ];
+
+    const escapeCsv = (str: any) => {
+      if (str === null || str === undefined) return '""';
+      const s = String(str).replace(/"/g, '""');
+      return `"${s}"`;
+    };
+
+    const rows = reportsList.map((r) => [
+      escapeCsv(r.reportDate ? r.reportDate.slice(0, 10) : ''),
+      escapeCsv(r.user?.displayName ?? ''),
+      escapeCsv(r.user?.email ?? ''),
+      escapeCsv(r.user?.role ?? ''),
+      escapeCsv(r.user?.team?.name ?? 'Unassigned'),
+      escapeCsv(r.hoursWorked ?? ''),
+      escapeCsv(r.taskLinks?.map((l) => l.task.title).join('; ') ?? ''),
+      escapeCsv(r.didToday ?? ''),
+      escapeCsv(r.blockers ?? 'None'),
+      escapeCsv(r.planTomorrow ?? ''),
+      escapeCsv(r.submittedAt ? new Date(r.submittedAt).toLocaleString() : ''),
+      escapeCsv(r.isLate ? 'LATE' : 'ON_TIME'),
+    ]);
+
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((row) => row.join(','))].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `Daily_Reports_${from}_to_${to}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -308,60 +421,246 @@ export default function ReportsPage() {
       {/* TAB 1: STAFF DASHBOARD & MONITORING VIEW */}
       {isStaff && tab === 'submissions' && (
         <div className="space-y-6">
-          {/* Controls: Date, Team filter, Search */}
-          <div className="card p-4 bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-3">
-              <div>
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
-                  Report Date
-                </label>
-                <input
-                  type="date"
-                  className="input text-xs !w-40 bg-white"
-                  value={selectedDate}
-                  max={today}
-                  onChange={(e) => {
-                    if (e.target.value) {
-                      setSelectedDate(e.target.value);
-                    }
-                  }}
-                />
+          {/* Upgraded Controls: Date Mode, Audience Filter, Search & Download */}
+          <div className="card p-4 bg-slate-50 border border-slate-200 space-y-3">
+            {/* Top row: Date Range Modes */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/80 pb-3">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-xs font-bold uppercase text-slate-500 mr-1.5">Timeframe:</span>
+                <button
+                  type="button"
+                  onClick={() => setDateFilterMode('day')}
+                  className={`rounded-lg px-3 py-1 text-xs font-semibold transition ${
+                    dateFilterMode === 'day'
+                      ? 'bg-brand text-white shadow-sm'
+                      : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                  }`}
+                >
+                  📅 Single Day
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDateFilterMode('week')}
+                  className={`rounded-lg px-3 py-1 text-xs font-semibold transition ${
+                    dateFilterMode === 'week'
+                      ? 'bg-brand text-white shadow-sm'
+                      : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                  }`}
+                >
+                  🗓️ This Week
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDateFilterMode('month')}
+                  className={`rounded-lg px-3 py-1 text-xs font-semibold transition ${
+                    dateFilterMode === 'month'
+                      ? 'bg-brand text-white shadow-sm'
+                      : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                  }`}
+                >
+                  📆 This Month
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDateFilterMode('custom')}
+                  className={`rounded-lg px-3 py-1 text-xs font-semibold transition ${
+                    dateFilterMode === 'custom'
+                      ? 'bg-brand text-white shadow-sm'
+                      : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                  }`}
+                >
+                  ⏳ Custom Range
+                </button>
               </div>
 
-              {isAdmin && (
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
-                    Team Filter
-                  </label>
-                  <select
-                    className="input text-xs w-auto bg-white"
-                    value={selectedTeam}
-                    onChange={(e) => setSelectedTeam(e.target.value)}
-                  >
-                    <option value="ALL">All Teams (Organization-wide)</option>
-                    {teams.map((t) => (
-                      <option key={t.id} value={t.id}>{t.name}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
+              {/* Download CSV Button */}
+              <button
+                type="button"
+                onClick={downloadReportsCSV}
+                className="rounded-xl border border-emerald-500 bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 transition flex items-center gap-1.5"
+                title="Download filtered reports as CSV spreadsheet"
+              >
+                <span>📥</span> Download Reports (CSV)
+              </button>
             </div>
 
-            <div className="flex items-center gap-2">
-              <input
-                type="search"
-                placeholder="Search staff by name or email..."
-                className="input text-xs w-60 bg-white"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-              <button
-                onClick={loadStaffData}
-                className="btn-secondary !py-1.5 text-xs"
-                title="Refresh Status"
-              >
-                Refresh
-              </button>
+            {/* Bottom row: Dynamic Date Inputs, Audience Selectors & Search */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-3">
+                {/* Single Day Picker */}
+                {dateFilterMode === 'day' && (
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                      Report Date
+                    </label>
+                    <input
+                      type="date"
+                      className="input text-xs !w-36 bg-white"
+                      value={selectedDate}
+                      max={today}
+                      onChange={(e) => {
+                        if (e.target.value) setSelectedDate(e.target.value);
+                      }}
+                    />
+                  </div>
+                )}
+
+                {/* Custom Range Pickers */}
+                {dateFilterMode === 'custom' && (
+                  <div className="flex items-center gap-2">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                        From Date
+                      </label>
+                      <input
+                        type="date"
+                        className="input text-xs !w-36 bg-white"
+                        value={customFrom}
+                        max={today}
+                        onChange={(e) => setCustomFrom(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                        To Date
+                      </label>
+                      <input
+                        type="date"
+                        className="input text-xs !w-36 bg-white"
+                        value={customTo}
+                        max={today}
+                        onChange={(e) => setCustomTo(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Week & Month Info Pills */}
+                {(dateFilterMode === 'week' || dateFilterMode === 'month') && (
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                      Active Range
+                    </label>
+                    <span className="inline-block rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700">
+                      {getDateRange().from} → {getDateRange().to}
+                    </span>
+                  </div>
+                )}
+
+                {/* Audience Selection for Admin */}
+                {isAdmin ? (
+                  <>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                        Audience Filter
+                      </label>
+                      <select
+                        className="input text-xs w-auto bg-white"
+                        value={selectedAudience}
+                        onChange={(e) => setSelectedAudience(e.target.value as any)}
+                      >
+                        <option value="ALL">🌐 All Teams (Organization-wide)</option>
+                        <option value="TEAM">👥 Particular Team</option>
+                        <option value="TEAM_LEADS">⭐ Team Leads Only</option>
+                        <option value="INDIVIDUAL">👤 Individual Member</option>
+                      </select>
+                    </div>
+
+                    {selectedAudience === 'TEAM' && (
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                          Select Team
+                        </label>
+                        <select
+                          className="input text-xs w-auto bg-white"
+                          value={selectedTeam}
+                          onChange={(e) => setSelectedTeam(e.target.value)}
+                        >
+                          <option value="ALL">All Teams</option>
+                          {teams.map((t) => (
+                            <option key={t.id} value={t.id}>{t.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {selectedAudience === 'INDIVIDUAL' && (
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                          Select Individual
+                        </label>
+                        <select
+                          className="input text-xs w-auto bg-white"
+                          value={selectedEmployee}
+                          onChange={(e) => setSelectedEmployee(e.target.value)}
+                        >
+                          <option value="ALL">All Staff</option>
+                          {allStaffMembers.map((m) => (
+                            <option key={m.id} value={m.id}>{m.displayName} ({m.role?.toLowerCase()})</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  /* Audience Selection for Team Lead */
+                  <>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                        Team Audience
+                      </label>
+                      <select
+                        className="input text-xs w-auto bg-white"
+                        value={selectedAudience}
+                        onChange={(e) => setSelectedAudience(e.target.value as any)}
+                      >
+                        <option value="ALL">👥 Entire Team</option>
+                        <option value="INDIVIDUAL">👤 Individual Member</option>
+                      </select>
+                    </div>
+
+                    {selectedAudience === 'INDIVIDUAL' && (
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                          Select Team Member
+                        </label>
+                        <select
+                          className="input text-xs w-auto bg-white"
+                          value={selectedEmployee}
+                          onChange={(e) => setSelectedEmployee(e.target.value)}
+                        >
+                          <option value="ALL">All Team Members</option>
+                          {allStaffMembers
+                            .filter((m) => m.teamId === user?.teamId || m.id === user?.id)
+                            .map((m) => (
+                              <option key={m.id} value={m.id}>
+                                {m.displayName} {m.id === user?.id ? '(Me - Lead)' : ''}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {/* Search & Refresh */}
+              <div className="flex items-center gap-2">
+                <input
+                  type="search"
+                  placeholder="Search staff by name or email..."
+                  className="input text-xs w-56 bg-white"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+                <button
+                  onClick={loadStaffData}
+                  className="btn-secondary !py-1.5 text-xs"
+                  title="Refresh Reports"
+                >
+                  Refresh
+                </button>
+              </div>
             </div>
           </div>
 
@@ -402,9 +701,102 @@ export default function ReportsPage() {
             </div>
           )}
 
-          {/* Submitted vs Missing Split Lists */}
+          {/* Submitted vs Missing Split Lists or Range Table */}
           {fetchingStaff ? (
             <Loading label="Retrieving daily reports status..." />
+          ) : dateFilterMode !== 'day' ? (
+            /* Multi-day Range Table View */
+            <div className="card border border-slate-200 p-5 bg-white">
+              <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                    <span>📋</span> Submitted Reports ({reportsList.length})
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Showing all reports filed from <b>{getDateRange().from}</b> to <b>{getDateRange().to}</b>
+                  </p>
+                </div>
+                <button
+                  onClick={downloadReportsCSV}
+                  className="rounded-xl border border-emerald-500 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 hover:bg-emerald-100 transition flex items-center gap-1.5"
+                >
+                  <span>📥</span> Export Table (CSV)
+                </button>
+              </div>
+
+              {reportsList.length === 0 ? (
+                <div className="p-8 text-center text-slate-500 text-xs">
+                  No standup reports filed during this timeframe matching the selected filters.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-200 bg-slate-50/70 text-slate-500 uppercase text-[10px]">
+                        <th className="py-2.5 px-3">Date</th>
+                        <th className="py-2.5 px-3">Employee</th>
+                        <th className="py-2.5 px-3">Team</th>
+                        <th className="py-2.5 px-3">Hours</th>
+                        <th className="py-2.5 px-3">Accomplishments</th>
+                        <th className="py-2.5 px-3">Status</th>
+                        <th className="py-2.5 px-3 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {reportsList
+                        .filter((r) => {
+                          if (!search) return true;
+                          const q = search.toLowerCase();
+                          return (
+                            (r.user?.displayName ?? '').toLowerCase().includes(q) ||
+                            (r.user?.email ?? '').toLowerCase().includes(q)
+                          );
+                        })
+                        .map((r) => (
+                          <tr
+                            key={r.id}
+                            className="hover:bg-slate-50/80 transition cursor-pointer"
+                            onClick={() => {
+                              setActiveReport(r);
+                              setDetailOpen(true);
+                            }}
+                          >
+                            <td className="py-2.5 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                              {r.reportDate ? r.reportDate.slice(0, 10) : ''}
+                            </td>
+                            <td className="py-2.5 px-3 font-medium text-slate-900 whitespace-nowrap">
+                              {r.user?.displayName ?? 'Staff'}
+                            </td>
+                            <td className="py-2.5 px-3 text-slate-500 whitespace-nowrap">
+                              {r.user?.team?.name ?? 'Unassigned'}
+                            </td>
+                            <td className="py-2.5 px-3 font-semibold text-slate-700">
+                              {r.hoursWorked}h
+                            </td>
+                            <td className="py-2.5 px-3 max-w-xs truncate text-slate-600">
+                              {r.didToday}
+                            </td>
+                            <td className="py-2.5 px-3 whitespace-nowrap">
+                              {r.isLate ? (
+                                <span className="rounded-full bg-rose-50 border border-rose-200 px-2 py-0.5 text-[10px] font-bold text-rose-700">
+                                  Late
+                                </span>
+                              ) : (
+                                <span className="rounded-full bg-emerald-50 border border-emerald-200 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+                                  On Time
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 text-right whitespace-nowrap text-brand font-semibold hover:underline">
+                              View details →
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           ) : !status ? (
             <Empty title="No data loaded" description="Select a date above to inspect submissions." />
           ) : (
@@ -481,7 +873,7 @@ export default function ReportsPage() {
               <div className="card border border-rose-200 bg-rose-50/20 p-5">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="font-bold text-rose-900 text-sm flex items-center gap-2">
-                    <span>❌</span> Missing Reports ({status.missing.length})
+                    <span>⏰</span> Missing Reports ({status.missing.length})
                   </h3>
                   <span className="text-xs text-rose-600 font-medium">Awaiting submission</span>
                 </div>
@@ -501,19 +893,19 @@ export default function ReportsPage() {
                       .map((u) => (
                         <div
                           key={u.id}
-                          className="flex items-center justify-between rounded-xl border border-rose-100 bg-white p-3 shadow-2xs"
+                          className="flex items-center justify-between rounded-xl border border-rose-200/80 bg-white p-3 shadow-2xs"
                         >
                           <div className="flex items-center gap-3 min-w-0">
                             <Avatar name={u.displayName} size={28} />
                             <div className="min-w-0">
-                              <p className="font-semibold text-slate-800 text-xs truncate">{u.displayName}</p>
+                              <p className="font-medium text-slate-900 text-xs truncate">{u.displayName}</p>
                               <p className="text-[10px] text-slate-400 truncate">
                                 {u.team?.name || 'Unassigned'} · {u.email}
                               </p>
                             </div>
                           </div>
-                          <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-medium text-rose-700">
-                            Missing
+                          <span className="rounded-full bg-rose-100 text-rose-800 text-[10px] font-semibold px-2 py-0.5">
+                            Not submitted
                           </span>
                         </div>
                       ))}

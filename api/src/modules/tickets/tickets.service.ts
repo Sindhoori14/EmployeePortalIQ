@@ -106,8 +106,8 @@ export class TicketsService {
     const isStaff =
       me.role === 'ADMIN' || t.assigneeId === me.id ||
       ((me.role === 'TEAM_LEAD' || me.role === 'COORDINATOR') && !!me.teamId && t.teamId === me.teamId);
-    const requesterClosing = t.requesterId === me.id && dto.status !== undefined && ['RESOLVED', 'CLOSED'].includes(dto.status) && Object.keys(dto).length === 1;
-    if (!isStaff && !requesterClosing) throw new ForbiddenException('Only the assignee, team lead or admin can update this ticket');
+    const isRequester = t.requesterId === me.id;
+    if (!isStaff && !isRequester) throw new ForbiddenException('Only the requester, assignee, team lead or admin can update this ticket');
 
     if (dto.assigneeId) {
       if (!isStaff) throw new ForbiddenException('Only the assignee, team lead or admin can reassign');
@@ -121,6 +121,10 @@ export class TicketsService {
     const updated = await this.prisma.ticket.update({
       where: { id },
       data: {
+        ...(dto.subject !== undefined ? { subject: dto.subject.trim() } : {}),
+        ...(dto.description !== undefined ? { description: dto.description.trim() } : {}),
+        ...(dto.category !== undefined ? { category: dto.category as any } : {}),
+        ...(dto.priority !== undefined ? { priority: dto.priority as any } : {}),
         ...(dto.status !== undefined ? { status: dto.status as any } : {}),
         ...(dto.resolution !== undefined ? { resolution: dto.resolution } : {}),
         ...(dto.assigneeId !== undefined ? { assigneeId: dto.assigneeId } : {}),
@@ -140,6 +144,16 @@ export class TicketsService {
       });
     }
     return updated;
+  }
+  async delete(me: RequestUser, id: string, ip?: string) {
+    const t = await this.mustSee(me, id);
+    const isStaff = me.role === 'ADMIN' || ((me.role === 'TEAM_LEAD' || me.role === 'COORDINATOR') && !!me.teamId && t.teamId === me.teamId);
+    const isRequester = t.requesterId === me.id;
+    if (!isStaff && !isRequester) throw new ForbiddenException('Only the person who raised the ticket, team lead or admin can delete it');
+    await this.prisma.ticketMessage.deleteMany({ where: { ticketId: id } });
+    await this.prisma.ticket.delete({ where: { id } });
+    await this.audit.log({ actorId: me.id, action: 'TICKET_DELETE', entity: 'ticket', entityId: id, ip });
+    return { ok: true };
   }
 
   async addMessage(me: RequestUser, id: string, dto: AddTicketMessageDto) {

@@ -10,6 +10,15 @@ import { CreateTeamDto, UpdateTeamDto } from './dto/teams.dto';
 export class TeamsService {
   constructor(private prisma: PrismaService, private audit: AuditService, private cache: UserCacheService) {}
 
+  private canManageTeam(me: RequestUser | undefined, t: { id: string; leadId?: string | null; createdById?: string | null }): boolean {
+    if (!me) return false;
+    if (me.role === 'ADMIN') return true;
+    if (me.role === 'TEAM_LEAD') {
+      return t.leadId === me.id || t.createdById === me.id || (Boolean(me.teamId) && t.id === me.teamId);
+    }
+    return false;
+  }
+
   /** A team's lead/coordinator must actually belong to that team, otherwise team-scoped permissions would lock them out. */
   private async syncStaff(teamId: string, ids: Array<string | null | undefined>) {
     const staff = ids.filter((x): x is string => Boolean(x));
@@ -58,7 +67,7 @@ export class TeamsService {
 
     return teams.map((t) => ({
       ...t,
-      canEdit: me ? (t.createdById === me.id || (me.role === 'ADMIN' && !t.createdById)) : false,
+      canEdit: this.canManageTeam(me, t),
     }));
   }
 
@@ -87,7 +96,7 @@ export class TeamsService {
       if (!canSee) throw new ForbiddenException('Forbidden: You do not have access to this team');
     }
 
-    const canEdit = t.createdById === me.id || (me.role === 'ADMIN' && !t.createdById);
+    const canEdit = this.canManageTeam(me, t);
     return { ...t, canEdit };
   }
 
@@ -155,9 +164,9 @@ export class TeamsService {
     });
     if (!existing) throw new NotFoundException('Team not found');
 
-    const canEdit = existing.createdById === me.id || (me.role === 'ADMIN' && !existing.createdById);
+    const canEdit = this.canManageTeam(me, existing);
     if (!canEdit) {
-      throw new ForbiddenException('Only the creator of this team can edit or manage it');
+      throw new ForbiddenException('Only Admins or authorized Team Leads can edit or manage this team');
     }
 
     if (dto.leadId) await this.assertUser(dto.leadId);
@@ -220,6 +229,37 @@ export class TeamsService {
     await this.syncStaff(id, [dto.leadId, dto.coordinatorId, dto.hrId]);
     await this.audit.log({ actorId: me.id, action: 'TEAM_UPDATE', entity: 'team', entityId: id, metadata: dto as any, ip });
     return { ...t, canEdit: true };
+  }
+
+  async delete(me: RequestUser, id: string, ip?: string) {
+    const existing = await this.prisma.team.findUnique({
+      where: { id },
+      include: { members: { select: { id: true } } },
+    });
+    if (!existing) throw new NotFoundException('Team not found');
+
+    const canDelete = this.canManageTeam(me, existing);
+    if (!canDelete) {
+      throw new ForbiddenException('Only Admins or authorized Team Leads can delete this team');
+    }
+
+    // 1. Unassign all users from this team
+    await this.prisma.user.updateMany({
+      where: { teamId: id },
+      data: { teamId: null },
+    });
+    existing.members.forEach((m) => this.cache.invalidate(m.id));
+
+    // 2. Clear relations that reference this teamId
+    // tasks cascade or remain associated
+    await this.prisma.meeting.deleteMany({ where: { teamId: id } });
+    await this.prisma.calendarEvent.deleteMany({ where: { teamId: id } });
+    await this.prisma.channel.deleteMany({ where: { teamId: id } });
+
+    // 3. Delete the team
+    await this.prisma.team.delete({ where: { id } });
+    await this.audit.log({ actorId: me.id, action: 'TEAM_DELETE', entity: 'team', entityId: id, metadata: { name: existing.name }, ip });
+    return { success: true, message: `Team ${existing.name} deleted successfully` };
   }
 
   private async assertUser(id: string) {

@@ -44,18 +44,23 @@ export default function TasksPage() {
   const [err, setErr] = useState('');
   const [open, setOpen] = useState(false);
   const [users, setUsers] = useState<UserRow[]>([]);
+  const [allUsers, setAllUsers] = useState<UserRow[]>([]);
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [projects, setProjects] = useState<{ id: string; name: string; teamId: string | null }[]>([]);
   const [form, setForm] = useState({ title: '', description: '', ownerId: '', teamId: '', projectId: '', priority: 'MEDIUM', dueDate: '', estimatedHours: '', recurrence: 'NONE', recurrenceUntil: '' });
   const [busy, setBusy] = useState(false);
 
+  // Filters (Teams, Team Leads, Specific Persons)
+  const [filterTeam, setFilterTeam] = useState('');
+  const [filterRole, setFilterRole] = useState('');
+  const [filterPerson, setFilterPerson] = useState('');
   const [search, setSearch] = useState('');
   const [overdueOnly, setOverdueOnly] = useState(false);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [more, setMore] = useState(false);
 
-  // Server-side search + paging: works for thousands of tasks, not just the first 100.
+  // Server-side search + filters + paging
   const load = useCallback(async (pageNo: number, append: boolean) => {
     setErr('');
     try {
@@ -63,6 +68,9 @@ export default function TasksPage() {
       if (status) p.set('status', status);
       if (search.trim()) p.set('search', search.trim());
       if (overdueOnly) p.set('overdue', 'true');
+      if (filterTeam) p.set('teamId', filterTeam);
+      if (filterPerson) p.set('ownerId', filterPerson);
+      if (filterRole === 'TEAM_LEADS') p.set('leadOnly', 'true');
       const r = await api<{ data: Task[]; meta: { total: number; totalPages: number } }>(`/tasks?${p}`);
       setTasks((cur) => (append ? [...cur, ...r.data.filter((n) => !cur.some((c) => c.id === n.id))] : r.data));
       setTotal(r.meta.total); setPage(pageNo); setMore(pageNo < r.meta.totalPages);
@@ -71,15 +79,15 @@ export default function TasksPage() {
     } finally {
       setFetching(false); setMore((m) => m);
     }
-  }, [status, search, overdueOnly]);
+  }, [status, search, overdueOnly, filterTeam, filterPerson, filterRole]);
 
   useEffect(() => {
     if (!user) return;
     const t = setTimeout(() => load(1, false), search ? 300 : 0);
     return () => clearTimeout(t);
-  }, [user, load, search]);
+  }, [user, load, search, filterTeam, filterPerson, filterRole, status, overdueOnly]);
 
-  // Live board: when anyone changes a task I can see, reload page 1 quietly.
+  // Live board updates
   useEffect(() => {
     if (!user) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -89,18 +97,28 @@ export default function TasksPage() {
     return () => { clearTimeout(timer); s.off('task:changed', bump); s.off('task:updated', bump); s.off('task:created', bump); };
   }, [user, load]);
 
+  // Load teams, projects, and users for filters and dropdowns
   const canCreate = user?.role === 'ADMIN' || user?.role === 'TEAM_LEAD' || user?.role === 'COORDINATOR';
   useEffect(() => {
-    if (!user || !canCreate) return;
+    if (!user) return;
     api<TeamRow[]>('/teams').then((all) => setTeams(user.role === 'COORDINATOR' ? all.filter((t) => t.id === user.teamId) : all)).catch(() => {});
     api<{ id: string; name: string; teamId: string | null }[]>('/projects').then(setProjects).catch(() => {});
-    setForm((f) => ({ ...f, teamId: user.teamId ?? '' }));
+    api<{ data: UserRow[] }>('/users?active=true&limit=200').then((r) => setAllUsers(r.data)).catch(() => {});
+    if (canCreate) {
+      setForm((f) => ({ ...f, teamId: user.teamId ?? '' }));
+    }
   }, [user, canCreate]);
 
-  // Assignee list follows the chosen team (the old code only ever fetched the first 100 users company-wide).
+  // Assignee list for task creation modal follows team choice
   useEffect(() => {
     if (!user || !canCreate || !form.teamId) { setUsers([]); return; }
-    api<{ data: UserRow[] }>(`/users?teamId=${form.teamId}&active=true&limit=100`).then((r) => setUsers(r.data)).catch(() => setUsers([]));
+    if (form.teamId === 'ALL_TEAMS') {
+      api<{ data: UserRow[] }>('/users?active=true&limit=200').then((r) => setUsers(r.data)).catch(() => setUsers([]));
+    } else if (form.teamId === 'TEAM_LEADS') {
+      api<{ data: UserRow[] }>('/users?active=true&limit=200').then((r) => setUsers(r.data.filter((u) => u.role === 'TEAM_LEAD'))).catch(() => setUsers([]));
+    } else {
+      api<{ data: UserRow[] }>(`/users?teamId=${form.teamId}&active=true&limit=100`).then((r) => setUsers(r.data)).catch(() => setUsers([]));
+    }
   }, [user, canCreate, form.teamId]);
 
   const shown = tasks;
@@ -110,20 +128,79 @@ export default function TasksPage() {
     e.preventDefault();
     setErr('');
     setBusy(true);
+
     try {
-      await api('/tasks', { method: 'POST', body: {
-        title: form.title, ownerId: form.ownerId, teamId: form.teamId, priority: form.priority, projectId: form.projectId || undefined,
+      const isEntireTeam = form.ownerId === 'ENTIRE_TEAM';
+      const isAllLeads = form.ownerId === 'ALL_LEADS';
+      const isAllMembers = form.ownerId === 'ALL_MEMBERS';
+
+      // Base payload attributes
+      const basePayload = {
+        title: form.title,
+        priority: form.priority,
+        projectId: form.projectId || undefined,
         description: form.description || undefined,
         dueDate: form.dueDate ? new Date(form.dueDate).toISOString() : undefined,
         estimatedHours: form.estimatedHours ? Number(form.estimatedHours) : undefined,
         recurrence: form.recurrence,
         recurrenceUntil: form.recurrence !== 'NONE' && form.recurrenceUntil ? new Date(form.recurrenceUntil).toISOString() : undefined,
-      } });
+      };
+
+      if (isEntireTeam) {
+        // Assign to all members of the selected team
+        const targetMembers = people.length > 0 ? people : allUsers.filter((u) => u.teamId === form.teamId);
+        if (targetMembers.length === 0) throw new Error('No active members found in this team to assign to.');
+        await Promise.all(
+          targetMembers.map((u) =>
+            api('/tasks', {
+              method: 'POST',
+              body: { ...basePayload, ownerId: u.id, teamId: form.teamId },
+            })
+          )
+        );
+      } else if (isAllLeads) {
+        // Assign to all team leads
+        const leads = allUsers.filter((u) => u.role === 'TEAM_LEAD');
+        if (leads.length === 0) throw new Error('No team leads found.');
+        await Promise.all(
+          leads.map((lead) => {
+            const teamId = lead.teamId || teams[0]?.id;
+            return api('/tasks', {
+              method: 'POST',
+              body: { ...basePayload, ownerId: lead.id, teamId },
+            });
+          })
+        );
+      } else if (isAllMembers) {
+        // Assign to all members
+        const activeMembers = allUsers.filter((u) => u.isActive && u.teamId);
+        if (activeMembers.length === 0) throw new Error('No active employees found with assigned teams.');
+        await Promise.all(
+          activeMembers.map((u) =>
+            api('/tasks', {
+              method: 'POST',
+              body: { ...basePayload, ownerId: u.id, teamId: u.teamId },
+            })
+          )
+        );
+      } else {
+        // Single user assignment
+        let actualTeamId = form.teamId;
+        if (form.teamId === 'ALL_TEAMS' || form.teamId === 'TEAM_LEADS') {
+          const selectedUser = allUsers.find((u) => u.id === form.ownerId);
+          actualTeamId = selectedUser?.teamId || teams[0]?.id || '';
+        }
+        await api('/tasks', {
+          method: 'POST',
+          body: { ...basePayload, ownerId: form.ownerId, teamId: actualTeamId },
+        });
+      }
+
       setOpen(false);
       setForm({ ...form, title: '', description: '', ownerId: '', projectId: '', dueDate: '', estimatedHours: '', recurrence: 'NONE', recurrenceUntil: '' });
       await load(1, false);
     } catch (ex) {
-      setErr(ex instanceof ApiError ? ex.message : 'Create failed');
+      setErr(ex instanceof ApiError ? ex.message : (ex as any)?.message || 'Create failed');
     } finally {
       setBusy(false);
     }
@@ -132,12 +209,17 @@ export default function TasksPage() {
   if (loading || !user) return <Loading />;
   const set = (k: string) => (e: React.ChangeEvent<any>) => setForm({ ...form, [k]: e.target.value });
 
+  // Filter available persons based on filterTeam
+  const filterPeopleOptions = filterTeam
+    ? allUsers.filter((u) => u.teamId === filterTeam)
+    : allUsers;
+
   return (
-    <div>
+    <div className="space-y-4">
       <PageHeader title="Tasks" sub={user.role === 'EMPLOYEE' ? 'Your assigned work.' : 'Track work across the team.'}>
-        <input className="input !w-48" type="search" placeholder="Search tasks…" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search tasks" />
+        <input className="input !w-44" type="search" placeholder="Search tasks…" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search tasks" />
         <button className={`btn-secondary ${overdueOnly ? '!border-red-300 !bg-red-50 !text-red-700' : ''}`} aria-pressed={overdueOnly} onClick={() => setOverdueOnly(!overdueOnly)}>⚠ Overdue</button>
-        <select className="input !w-40" value={status} onChange={(e) => setStatus(e.target.value)}>
+        <select className="input !w-36" value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Filter status">
           <option value="">All statuses</option>
           {COLS.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
         </select>
@@ -146,8 +228,74 @@ export default function TasksPage() {
         </div>
         {canCreate && <button className="btn" onClick={() => setOpen(true)}>+ New task</button>}
       </PageHeader>
-      {err && !open && <p className="err mb-4">{err}</p>}
-      {!fetching && total > shown.length && <p className="mb-3 text-xs text-slate-500">Showing {shown.length} of {total} tasks.</p>}
+
+      {/* Filter bar: Teams, Team Leads, Specific Persons */}
+      <div className="flex flex-wrap items-center gap-2.5 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+        <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Filters:</span>
+        
+        {/* Filter by Team */}
+        <select
+          className="input !w-auto !py-1.5 !text-xs"
+          value={filterTeam}
+          onChange={(e) => {
+            setFilterTeam(e.target.value);
+            setFilterPerson('');
+          }}
+          aria-label="Filter by Team"
+        >
+          <option value="">All Teams</option>
+          {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+
+        {/* Filter by Team Leads */}
+        <select
+          className="input !w-auto !py-1.5 !text-xs"
+          value={filterRole}
+          onChange={(e) => {
+            setFilterRole(e.target.value);
+            setFilterPerson('');
+          }}
+          aria-label="Filter by Role or Team Lead"
+        >
+          <option value="">All Roles</option>
+          <option value="TEAM_LEADS">Team Leads only</option>
+        </select>
+
+        {/* Filter by Specific Person */}
+        <select
+          className="input !w-auto !py-1.5 !text-xs"
+          value={filterPerson}
+          onChange={(e) => setFilterPerson(e.target.value)}
+          aria-label="Filter by Specific Person"
+        >
+          <option value="">All Persons</option>
+          {filterPeopleOptions
+            .filter((u) => (filterRole === 'TEAM_LEADS' ? u.role === 'TEAM_LEAD' : true))
+            .map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.displayName} {u.role === 'TEAM_LEAD' ? '(Lead)' : ''}
+              </option>
+            ))}
+        </select>
+
+        {(filterTeam || filterRole || filterPerson) && (
+          <button
+            type="button"
+            className="text-xs font-semibold text-brand-600 hover:underline"
+            onClick={() => {
+              setFilterTeam('');
+              setFilterRole('');
+              setFilterPerson('');
+            }}
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      {err && !open && <p className="err">{err}</p>}
+      {!fetching && total > shown.length && <p className="text-xs text-slate-500">Showing {shown.length} of {total} tasks.</p>}
+
       {fetching ? <Loading /> : shown.length === 0 ? <div className="card"><Empty icon="🗂️" text="No tasks found." /></div> : view === 'board' ? (
         <div className="-mx-4 flex gap-4 overflow-x-auto px-4 pb-4 lg:mx-0 lg:px-0">
           {(status ? [status] : COLS).map((c) => {
@@ -183,21 +331,56 @@ export default function TasksPage() {
         <div className="mt-4 flex justify-center"><button className="btn-secondary" onClick={() => load(page + 1, true)}>Load more tasks</button></div>
       )}
 
+      {/* Task Creation Modal */}
       <Modal open={open} onClose={() => setOpen(false)} title="Assign a new task">
         <form onSubmit={create} className="space-y-4">
           <div><label className="label">Title</label><input className="input" required maxLength={200} value={form.title} onChange={set('title')} placeholder="e.g. Onboard 5 interns" /></div>
           <div><label className="label">Description (optional)</label><textarea className="input" rows={3} value={form.description} onChange={set('description')} /></div>
           <div className="grid grid-cols-2 gap-3">
-            <div><label className="label">Team</label>
+            <div>
+              <label className="label">Team</label>
               <select className="input" required value={form.teamId} onChange={(e) => setForm({ ...form, teamId: e.target.value, ownerId: '', projectId: '' })}>
-                <option value="">Select team</option>{teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select></div>
-            <div><label className="label">Assign to</label>
+                <option value="">Select team</option>
+                {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                <option value="ALL_TEAMS">All Teams</option>
+                <option value="TEAM_LEADS">Team Leads</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Assign to</label>
               <select className="input" required value={form.ownerId} onChange={set('ownerId')}>
-                <option value="">Select person</option>{people.map((u) => <option key={u.id} value={u.id}>{u.displayName}</option>)}
-              </select></div>
-            <div><label className="label">Priority</label>
-              <select className="input" value={form.priority} onChange={set('priority')}>{['LOW', 'MEDIUM', 'HIGH', 'URGENT'].map((p) => <option key={p}>{p}</option>)}</select></div>
+                <option value="">Select person</option>
+                {/* When a specific team is chosen */}
+                {form.teamId && form.teamId !== 'ALL_TEAMS' && form.teamId !== 'TEAM_LEADS' && (
+                  <option value="ENTIRE_TEAM" className="font-bold text-brand-600">
+                    ★ Entire Team (All members)
+                  </option>
+                )}
+                {/* When Team Leads option is chosen */}
+                {form.teamId === 'TEAM_LEADS' && (
+                  <option value="ALL_LEADS" className="font-bold text-brand-600">
+                    ★ All Team Leads
+                  </option>
+                )}
+                {/* When All Teams option is chosen */}
+                {form.teamId === 'ALL_TEAMS' && (
+                  <option value="ALL_MEMBERS" className="font-bold text-brand-600">
+                    ★ Entire Organization (All members)
+                  </option>
+                )}
+                {people.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.displayName} {u.role === 'TEAM_LEAD' ? '(Lead)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">Priority</label>
+              <select className="input" value={form.priority} onChange={set('priority')}>
+                {['LOW', 'MEDIUM', 'HIGH', 'URGENT'].map((p) => <option key={p}>{p}</option>)}
+              </select>
+            </div>
             <div><label className="label">Due date</label><input className="input" type="date" required={form.recurrence !== 'NONE'} value={form.dueDate} onChange={set('dueDate')} /></div>
           </div>
           <div><label className="label">Project (optional)</label>
