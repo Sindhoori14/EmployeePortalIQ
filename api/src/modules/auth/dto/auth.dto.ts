@@ -1,4 +1,4 @@
-import { IsEmail, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsEmail, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 import { Transform } from 'class-transformer';
 
 // Policy (Stage 3 answers): Basic 8 chars — min 8, at least 1 letter + 1 number.
@@ -27,6 +27,11 @@ export class ChangePasswordDto {
     message: 'newPassword must contain at least one letter and one number',
   })
   newPassword!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  confirmNewPassword?: string;
 }
 
 export class ForgotPasswordDto {

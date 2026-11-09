@@ -64,7 +64,9 @@ export default function UsersPage() {
   const [paste, setPaste] = useState('');
   const [bulkResult, setBulkResult] = useState<null | { created: Cred[]; skipped: { email: string; reason: string }[] }>(null);
 
-  const roleOptions = isAdmin ? ['EMPLOYEE', 'COORDINATOR', 'TEAM_LEAD', 'ADMIN'] : ['EMPLOYEE', 'COORDINATOR'];
+  const roleOptions = isAdmin
+    ? ['EMPLOYEE', 'COORDINATOR', 'TEAM_LEAD', 'ADMIN', 'HR_MANAGER', 'HR_SUPPORT']
+    : ['EMPLOYEE', 'COORDINATOR'];
 
   useEffect(() => { const t = setTimeout(() => { setQ(search.trim()); setPage(1); }, 300); return () => clearTimeout(t); }, [search]);
 
@@ -155,7 +157,10 @@ export default function UsersPage() {
       const roleRaw = (c[2] || '').toUpperCase().replace(/\s+/g, '_');
       const role = roleRaw === 'LEAD' ? 'TEAM_LEAD' : roleRaw;
       if (!/^\S+@\S+\.\S+$/.test(c[0] || '') || !c[1]) { bad.push(t); continue; }
-      if (role && !['EMPLOYEE', 'COORDINATOR', 'TEAM_LEAD'].includes(role)) { bad.push(t); continue; }
+      const allowedBulkRoles = isAdmin
+        ? ['EMPLOYEE', 'COORDINATOR', 'TEAM_LEAD', 'HR_MANAGER', 'HR_SUPPORT']
+        : ['EMPLOYEE', 'COORDINATOR'];
+      if (role && !allowedBulkRoles.includes(role)) { bad.push(t); continue; }
       out.push({ email: c[0].toLowerCase(), displayName: c[1], ...(role ? { role } : {}), ...(c[3] ? { team: c[3] } : {}), ...(c[4] ? { batch: c[4] } : {}) });
     }
     return { out, bad };
@@ -311,7 +316,7 @@ export default function UsersPage() {
             <textarea className="input h-44 font-mono text-xs" placeholder={'asha@company.com, Asha Rao, employee, Web Team, Oct 2026 Batch\nravi@company.com, Ravi Kumar'} value={paste} onChange={(e) => setPaste(e.target.value)} />
             <p className="text-xs text-slate-500">
               <b>{parsed.out.length}</b> ready{parsed.bad.length > 0 && <> · <span className="text-red-600">{parsed.bad.length} line{parsed.bad.length > 1 ? 's' : ''} cannot be read</span></>}.
-              Roles: employee, coordinator{isAdmin ? ', lead' : ''}. Team and batch names must already exist. Up to 300 per import.
+              Roles: employee, coordinator{isAdmin ? ', lead, hr_manager, hr_support' : ''}. Team and batch names must already exist. Up to 300 per import.
             </p>
             {parsed.bad.length > 0 && <ul className="max-h-24 overflow-y-auto rounded-xl bg-red-50 p-3 text-xs text-red-700">{parsed.bad.slice(0, 10).map((b, i) => <li key={i}>{b}</li>)}</ul>}
             <button className="btn w-full" disabled={busy || parsed.out.length === 0 || parsed.out.length > 300} onClick={runBulk}>{busy ? 'Creating accounts…' : `Create ${parsed.out.length} account${parsed.out.length === 1 ? '' : 's'}`}</button>

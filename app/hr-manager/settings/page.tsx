@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../../../lib/api';
 import { Loading, PageHeader } from '../../../components/ui';
+import { ChangePasswordCard } from '../../../components/ChangePasswordCard';
 import { useRequireAuth } from '../../../lib/auth-context';
 
 interface SessionItem {
@@ -104,14 +105,6 @@ export default function HrManagerSettingsPage() {
     'security' | 'notifications' | 'recruitment' | 'work' | 'appearance'
   >('security');
 
-  // Password State
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [passwordMsg, setPasswordMsg] = useState('');
-  const [passwordErr, setPasswordErr] = useState('');
-  const [passwordBusy, setPasswordBusy] = useState(false);
-
   // Sessions State
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
@@ -156,39 +149,6 @@ export default function HrManagerSettingsPage() {
     loadSessions();
     loadPreferences();
   }, [user]);
-
-  // Handle Password Change
-  const handleChangePassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setPasswordErr('');
-    setPasswordMsg('');
-
-    if (newPassword.length < 8 || !/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
-      setPasswordErr('New password must be at least 8 characters and contain both letters and numbers.');
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setPasswordErr('New password and confirmation do not match.');
-      return;
-    }
-
-    setPasswordBusy(true);
-    try {
-      await api('/auth/change-password', {
-        method: 'POST',
-        body: { currentPassword, newPassword },
-      });
-      setPasswordMsg('Password changed successfully.');
-      setCurrentPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-      loadSessions();
-    } catch (ex) {
-      setPasswordErr(ex instanceof ApiError ? ex.message : 'Could not change password.');
-    } finally {
-      setPasswordBusy(false);
-    }
-  };
 
   // Handle Revoke Session
   const handleRevokeSession = async (id: string) => {
@@ -264,7 +224,7 @@ export default function HrManagerSettingsPage() {
       />
 
       {/* Settings Navigation Tabs */}
-      <div className="flex border-b border-slate-200 gap-1 overflow-x-auto text-sm font-medium">
+      <div className="flex flex-wrap border-b border-slate-200 gap-1 text-sm font-medium">
         <button
           onClick={() => setActiveTab('security')}
           className={`px-4 py-2.5 border-b-2 transition whitespace-nowrap ${
@@ -327,74 +287,7 @@ export default function HrManagerSettingsPage() {
       {/* TAB 1: Account & Security */}
       {activeTab === 'security' && (
         <div className="space-y-6">
-          {/* Change Password Card */}
-          <div className="card space-y-4">
-            <div>
-              <h2 className="text-base font-semibold text-slate-900">Change Password</h2>
-              <p className="text-xs text-slate-500">
-                Update your account password. Requires your current password for security verification.
-              </p>
-            </div>
-
-            {passwordMsg && (
-              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 font-medium">
-                ✓ {passwordMsg}
-              </div>
-            )}
-            {passwordErr && <p className="err">{passwordErr}</p>}
-
-            <form onSubmit={handleChangePassword} className="space-y-3 max-w-md">
-              <div>
-                <label className="text-xs font-semibold text-slate-700 block mb-1">
-                  Current Password
-                </label>
-                <input
-                  type="password"
-                  required
-                  value={currentPassword}
-                  onChange={(e) => setCurrentPassword(e.target.value)}
-                  className="input text-xs w-full"
-                  placeholder="Enter current password"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-slate-700 block mb-1">
-                  New Password
-                </label>
-                <input
-                  type="password"
-                  required
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  className="input text-xs w-full"
-                  placeholder="At least 8 chars with letter and number"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-slate-700 block mb-1">
-                  Confirm New Password
-                </label>
-                <input
-                  type="password"
-                  required
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  className="input text-xs w-full"
-                  placeholder="Re-type new password"
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={passwordBusy}
-                className="btn-primary text-xs"
-              >
-                {passwordBusy ? 'Updating...' : 'Update Password'}
-              </button>
-            </form>
-          </div>
+          <ChangePasswordCard onSuccess={loadSessions} />
 
           {/* Active Sessions Card */}
           <div className="card space-y-4">

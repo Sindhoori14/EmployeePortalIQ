@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, ApiError, downloadFile } from '../../lib/api';
+import { api, ApiError, downloadFile, ROLE_LABEL } from '../../lib/api';
 import { useRequireAuth } from '../../lib/auth-context';
 import { Avatar, Loading, Modal, PageHeader } from '../../components/ui';
 import { useMyAttendance, useTick } from '../../components/AttendanceProvider';
@@ -8,6 +8,8 @@ import { BreakPicker } from '../../components/BreakPicker';
 import { useAvatars } from '../../components/AvatarProvider';
 import { getSocket } from '../../lib/realtime';
 import { BREAK_EMOJI, BREAK_LABEL, DayState, fmtDur, fmtTime, hhmm, liveMinutes, monthLabel, shiftMonth, STATE_LABEL, STATE_PILL, STATE_RING } from '../../lib/attendance';
+
+const ROLE_OPTIONS = ['ADMIN', 'HR_MANAGER', 'HR_SUPPORT', 'TEAM_LEAD', 'COORDINATOR', 'EMPLOYEE'] as const;
 
 interface BoardRow {
   userId: string; name: string; email: string; role: string; teamId: string | null; teamName: string | null; batchName: string | null; day: string;
@@ -142,7 +144,12 @@ function MonthView({ userId, canExport, onEdit }: { userId: string; canExport: b
         <button className="btn-secondary !px-3" onClick={() => setMonth(shiftMonth(month, -1))} aria-label="Previous month">←</button>
         <h3 className="min-w-[10rem] text-center font-semibold text-ink-900">{monthLabel(month)}</h3>
         <button className="btn-secondary !px-3" disabled={month >= todayStr().slice(0, 7)} onClick={() => setMonth(shiftMonth(month, 1))} aria-label="Next month">→</button>
-        {canExport && <button className="btn-secondary ml-auto !text-xs" onClick={() => downloadFile(`/attendance/export?type=person&userId=${userId}&month=${month}`, 'attendance.xlsx').catch((e) => setErr(e.message))}>⬇ Excel</button>}
+        {canExport && (
+          <div className="ml-auto flex gap-2">
+            <button className="btn-secondary !text-xs" onClick={() => downloadFile(`/attendance/export?type=person&userId=${userId}&month=${month}&format=xlsx`, `attendance-${month}.xlsx`).catch((e) => setErr(e.message))}>⬇ Excel</button>
+            <button className="btn-secondary !text-xs" onClick={() => downloadFile(`/attendance/export?type=person&userId=${userId}&month=${month}&format=csv`, `attendance-${month}.csv`).catch((e) => setErr(e.message))}>⬇ CSV</button>
+          </div>
+        )}
       </div>
       {err && <p className="err mb-3" role="alert">{err}</p>}
       {!data ? <Loading /> : (
@@ -193,10 +200,13 @@ const FILTERS: { k: string; l: string; test: (r: BoardRow) => boolean }[] = [
   { k: 'leave', l: 'Leave', test: (r) => r.state === 'LEAVE' },
 ];
 
-function BoardView({ isAdmin, onOpen }: { isAdmin: boolean; onOpen: (r: BoardRow) => void }) {
+function BoardView({ isOrg, onOpen }: { isOrg: boolean; onOpen: (r: BoardRow) => void }) {
   const [date, setDate] = useState(todayStr());
   const [teamId, setTeamId] = useState('');
+  const [batchId, setBatchId] = useState('');
+  const [role, setRole] = useState('');
   const [teams, setTeams] = useState<{ id: string; name: string }[]>([]);
+  const [batches, setBatches] = useState<{ id: string; name: string }[]>([]);
   const [board, setBoard] = useState<Board | null>(null);
   const [filter, setFilter] = useState('all');
   const [q, setQ] = useState('');
@@ -206,13 +216,16 @@ function BoardView({ isAdmin, onOpen }: { isAdmin: boolean; onOpen: (r: BoardRow
   const load = useCallback(async () => {
     try {
       const p = new URLSearchParams({ date });
-      if (teamId) p.set('teamId', teamId);
+      if (isOrg && teamId) p.set('teamId', teamId);
+      if (batchId) p.set('batchId', batchId);
+      if (role) p.set('role', role);
       setBoard(await api<Board>(`/attendance/board?${p}`)); setErr('');
     } catch (e) { setErr(e instanceof ApiError ? e.message : 'Load failed'); }
-  }, [date, teamId]);
+  }, [date, isOrg, teamId, batchId, role]);
 
   useEffect(() => { setBoard(null); void load(); }, [load]);
-  useEffect(() => { if (isAdmin) api<{ id: string; name: string }[]>('/teams').then(setTeams).catch(() => {}); }, [isAdmin]);
+  useEffect(() => { if (isOrg) api<{ id: string; name: string }[]>('/teams').then(setTeams).catch(() => {}); }, [isOrg]);
+  useEffect(() => { api<{ id: string; name: string }[]>('/batches').then(setBatches).catch(() => {}); }, []);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const bump = () => { clearTimeout(timer); timer = setTimeout(load, 1200); }; // many people check in at once: refetch once, not per event
@@ -225,10 +238,18 @@ function BoardView({ isAdmin, onOpen }: { isAdmin: boolean; onOpen: (r: BoardRow
   const shown = useMemo(() => {
     const f = FILTERS.find((x) => x.k === filter)!;
     const n = q.trim().toLowerCase();
-    return (board?.rows ?? []).filter(f.test).filter((r) => !n || r.name.toLowerCase().includes(n) || (r.teamName ?? '').toLowerCase().includes(n));
+    return (board?.rows ?? []).filter(f.test).filter((r) =>
+      !n
+      || r.name.toLowerCase().includes(n)
+      || r.email.toLowerCase().includes(n)
+      || (r.teamName ?? '').toLowerCase().includes(n)
+      || (r.batchName ?? '').toLowerCase().includes(n)
+      || (ROLE_LABEL[r.role] ?? r.role).toLowerCase().includes(n),
+    );
   }, [board, filter, q]);
   const counts = useMemo(() => Object.fromEntries(FILTERS.map((f) => [f.k, (board?.rows ?? []).filter(f.test).length])), [board]);
   const s = board?.summary;
+  const hasFilters = Boolean(teamId || batchId || role || q);
   const tile = (title: string, val: number | string, tone = 'text-ink-900') => (
     <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{title}</p><p className={`text-2xl font-extrabold ${tone}`}>{val}</p></div>
   );
@@ -237,12 +258,22 @@ function BoardView({ isAdmin, onOpen }: { isAdmin: boolean; onOpen: (r: BoardRow
     <div>
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <input className="input !w-44" type="date" max={todayStr()} value={date} onChange={(e) => e.target.value && setDate(e.target.value)} aria-label="Date" />
-        {isAdmin && (
-          <select className="input !w-48" value={teamId} onChange={(e) => setTeamId(e.target.value)} aria-label="Team">
+        <select className="input !w-auto min-w-[10rem] pr-9" value={role} onChange={(e) => setRole(e.target.value)} aria-label="Filter by role">
+          <option value="">All roles</option>
+          {ROLE_OPTIONS.map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
+        </select>
+        {isOrg && (
+          <select className="input !w-auto min-w-[10.5rem] pr-9" value={teamId} onChange={(e) => setTeamId(e.target.value)} aria-label="Filter by team">
             <option value="">All teams</option>{teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}<option value="none">No team</option>
           </select>
         )}
-        <input className="input !w-56" type="search" placeholder="Search name or team…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search" />
+        <select className="input !w-auto min-w-[12rem] pr-9" value={batchId} onChange={(e) => setBatchId(e.target.value)} aria-label="Filter by intern group">
+          <option value="">All batches / groups</option>{batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}<option value="none">No batch</option>
+        </select>
+        <input className="input !w-52" type="search" placeholder="Search name, role or team…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search" />
+        {hasFilters && (
+          <button type="button" className="btn-ghost !text-xs" onClick={() => { setTeamId(''); setBatchId(''); setRole(''); setQ(''); }}>Reset</button>
+        )}
         {date === todayStr() && <span className="ml-auto flex items-center gap-1.5 text-xs text-green-600"><span className="h-2 w-2 animate-pulse rounded-full bg-green-500" />Live</span>}
       </div>
       {err && <p className="err mb-3" role="alert">{err}</p>}
@@ -276,6 +307,7 @@ function BoardView({ isAdmin, onOpen }: { isAdmin: boolean; onOpen: (r: BoardRow
                     <span className="min-w-0 flex-1">
                       <span className="flex flex-wrap items-center gap-x-2">
                         <span className="truncate font-semibold text-ink-900">{r.name}</span>
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">{ROLE_LABEL[r.role] ?? r.role}</span>
                         <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${STATE_PILL[r.state]}`}>{r.state === 'ON_BREAK' && r.breakReason ? `${BREAK_EMOJI[r.breakReason]} ${BREAK_LABEL[r.breakReason]} break` : STATE_LABEL[r.state]}</span>
                         {r.checkInAt && r.late && !r.halfDay && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">Late {r.lateMinutes}m</span>}
                         {r.halfDay && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">Half day</span>}
@@ -283,7 +315,7 @@ function BoardView({ isAdmin, onOpen }: { isAdmin: boolean; onOpen: (r: BoardRow
                         {r.autoClosed && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">auto check-out</span>}
                       </span>
                       <span className="mt-0.5 block truncate text-xs text-slate-500">
-                        {r.teamName ?? 'No team'}{r.checkInAt ? ` · In ${fmtTime(r.checkInAt)}` : ''}{r.checkOutAt ? ` · Out ${fmtTime(r.checkOutAt)}` : ''}{r.checkInAt ? ` · ${fmtDur(r.workedMinutes)} worked` : ''}{r.breakMinutes ? ` · ${fmtDur(r.breakMinutes)} break` : ''}{r.mode === 'REMOTE' ? ' · remote' : ''}
+                        {r.teamName ?? 'No team'}{r.batchName ? ` · ${r.batchName}` : ''}{r.checkInAt ? ` · In ${fmtTime(r.checkInAt)}` : ''}{r.checkOutAt ? ` · Out ${fmtTime(r.checkOutAt)}` : ''}{r.checkInAt ? ` · ${fmtDur(r.workedMinutes)} worked` : ''}{r.breakMinutes ? ` · ${fmtDur(r.breakMinutes)} break` : ''}{r.mode === 'REMOTE' ? ' · remote' : ''}
                       </span>
                     </span>
                   </button>
@@ -298,35 +330,54 @@ function BoardView({ isAdmin, onOpen }: { isAdmin: boolean; onOpen: (r: BoardRow
 }
 
 /* ───────────── Exports ───────────── */
-function ExportPanel({ isAdmin }: { isAdmin: boolean }) {
+function ExportPanel({ isOrg, myTeamId }: { isOrg: boolean; myTeamId: string | null }) {
   const [date, setDate] = useState(todayStr());
   const [month, setMonth] = useState(todayStr().slice(0, 7));
   const [fmt, setFmt] = useState<'xlsx' | 'csv'>('xlsx');
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
   const [teams, setTeams] = useState<{ id: string; name: string }[]>([]);
+  const [batches, setBatches] = useState<{ id: string; name: string }[]>([]);
   const [teamId, setTeamId] = useState('');
+  const [batchId, setBatchId] = useState('');
+  const [role, setRole] = useState('');
   const [find, setFind] = useState('');
-  const [people, setPeople] = useState<{ id: string; displayName: string; email: string }[]>([]);
-  const [person, setPerson] = useState<{ id: string; displayName: string } | null>(null);
+  const [people, setPeople] = useState<{ id: string; displayName: string; email: string; role: string }[]>([]);
+  const [person, setPerson] = useState<{ id: string; displayName: string; role?: string } | null>(null);
   const [pMonth, setPMonth] = useState(todayStr().slice(0, 7));
   const [range, setRange] = useState(false);
   const [from, setFrom] = useState(`${todayStr().slice(0, 7)}-01`);
   const [to, setTo] = useState(todayStr());
 
-  useEffect(() => { if (isAdmin) api<{ id: string; name: string }[]>('/teams').then(setTeams).catch(() => {}); }, [isAdmin]);
+  useEffect(() => { if (isOrg) api<{ id: string; name: string }[]>('/teams').then(setTeams).catch(() => {}); }, [isOrg]);
+  useEffect(() => { api<{ id: string; name: string }[]>('/batches').then(setBatches).catch(() => {}); }, []);
   useEffect(() => {
     if (find.trim().length < 2) { setPeople([]); return; }
-    const t = setTimeout(() => api<{ data: any[] }>(`/users?limit=8&active=true&search=${encodeURIComponent(find.trim())}`).then((r) => setPeople(r.data)).catch(() => {}), 250);
+    const q = new URLSearchParams({ limit: '8', active: 'true', search: find.trim() });
+    if (role) q.set('role', role);
+    if (isOrg && teamId && teamId !== 'none') q.set('teamId', teamId);
+    else if (!isOrg && myTeamId) q.set('teamId', myTeamId);
+    if (batchId && batchId !== 'none') q.set('batchId', batchId);
+    const t = setTimeout(() => api<{ data: any[] }>(`/users?${q}`).then((r) => setPeople(r.data)).catch(() => {}), 250);
     return () => clearTimeout(t);
-  }, [find]);
+  }, [find, role, teamId, batchId, isOrg, myTeamId]);
 
-  const go = async (key: string, path: string) => {
+  const go = async (key: string, params: Record<string, string>) => {
     setBusy(key); setErr('');
-    try { await downloadFile(`/attendance/export?${path}&format=${fmt}${teamId ? `&teamId=${teamId}` : ''}`, `attendance.${fmt}`); }
+    try {
+      const qs = new URLSearchParams({ ...params, format: fmt });
+      if (params.type !== 'person') {
+        if (isOrg && teamId) qs.set('teamId', teamId);
+        if (batchId) qs.set('batchId', batchId);
+        if (role) qs.set('role', role);
+      }
+      await downloadFile(`/attendance/export?${qs}`, `attendance-${params.type}.${fmt}`);
+    }
     catch (e) { setErr(e instanceof ApiError ? e.message : 'Download failed'); }
     finally { setBusy(''); }
   };
+
+  const hasFilters = Boolean(role || teamId || batchId);
   const Card = ({ title, sub, children }: { title: string; sub: string; children: React.ReactNode }) => (
     <div className="card"><h3 className="font-semibold text-ink-900">{title}</h3><p className="mb-3 text-xs text-slate-500">{sub}</p>{children}</div>
   );
@@ -336,35 +387,62 @@ function ExportPanel({ isAdmin }: { isAdmin: boolean }) {
         <div className="inline-flex rounded-xl border border-slate-200 p-0.5 text-sm" role="group" aria-label="File format">
           {(['xlsx', 'csv'] as const).map((f) => <button key={f} type="button" aria-pressed={fmt === f} className={`rounded-lg px-4 py-1.5 font-semibold ${fmt === f ? 'bg-brand-600 text-white' : 'text-slate-600'}`} onClick={() => setFmt(f)}>{f === 'xlsx' ? 'Excel (.xlsx)' : 'CSV'}</button>)}
         </div>
-        {isAdmin && (
-          <select className="input !w-48" value={teamId} onChange={(e) => setTeamId(e.target.value)} aria-label="Limit to team">
-            <option value="">Everyone (all teams)</option>{teams.map((t) => <option key={t.id} value={t.id}>{t.name} only</option>)}
+        <select className="input !w-auto min-w-[12.5rem] pr-9" value={role} onChange={(e) => setRole(e.target.value)} aria-label="Limit to role">
+          <option value="">Everyone (all roles)</option>
+          {ROLE_OPTIONS.map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
+        </select>
+        {isOrg && (
+          <select className="input !w-auto min-w-[12.5rem] pr-9" value={teamId} onChange={(e) => setTeamId(e.target.value)} aria-label="Limit to team">
+            <option value="">Everyone (all teams)</option>{teams.map((t) => <option key={t.id} value={t.id}>{t.name} only</option>)}<option value="none">No team</option>
           </select>
         )}
+        <select className="input !w-auto min-w-[12.5rem] pr-9" value={batchId} onChange={(e) => setBatchId(e.target.value)} aria-label="Limit to intern group">
+          <option value="">All batches / groups</option>{batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}<option value="none">No batch</option>
+        </select>
+        {hasFilters && (
+          <button type="button" className="btn-ghost !text-xs" onClick={() => { setRole(''); setTeamId(''); setBatchId(''); }}>Reset filters</button>
+        )}
       </div>
+      {hasFilters && (
+        <p className="mb-3 text-xs text-slate-500">
+          Active filters apply to Daily sheet & Monthly register exports:{' '}
+          <b className="text-ink-900">
+            {[
+              role ? `Role: ${ROLE_LABEL[role] ?? role}` : null,
+              teamId ? `Team: ${teamId === 'none' ? 'No team' : teams.find((t) => t.id === teamId)?.name ?? teamId}` : null,
+              batchId ? `Batch: ${batchId === 'none' ? 'No batch' : batches.find((b) => b.id === batchId)?.name ?? batchId}` : null,
+            ].filter(Boolean).join(' · ')}
+          </b>
+        </p>
+      )}
       {err && <p className="err mb-3" role="alert">{err}</p>}
       <div className="grid gap-4 lg:grid-cols-3">
-        <Card title="📅 Daily sheet" sub="Everyone for one day: summary, by team, who was in/out/late/absent, and every break.">
+        <Card title="📅 Daily sheet" sub="Everyone matching filters for one day: check-in/out, role, team, breaks & durations.">
           <input className="input mb-3" type="date" max={todayStr()} value={date} onChange={(e) => setDate(e.target.value)} aria-label="Day" />
-          <button className="btn w-full" disabled={busy === 'day'} onClick={() => go('day', `type=day&date=${date}`)}>{busy === 'day' ? 'Preparing…' : '⬇ Download daily'}</button>
+          <button className="btn w-full" disabled={busy === 'day'} onClick={() => go('day', { type: 'day', date })}>{busy === 'day' ? 'Preparing…' : '⬇ Download daily'}</button>
         </Card>
-        <Card title="🗓️ Monthly register" sub="Everyone for a month: summary per person, a P/L/A day-by-day register, and every detail row.">
+        <Card title="🗓️ Monthly register" sub="Everyone matching filters for a month: summary, day-by-day grid, details & Breaks sheet.">
           <input className="input mb-3" type="month" max={todayStr().slice(0, 7)} value={month} onChange={(e) => setMonth(e.target.value)} aria-label="Month" />
-          <button className="btn w-full" disabled={busy === 'month'} onClick={() => go('month', `type=month&month=${month}`)}>{busy === 'month' ? 'Preparing…' : '⬇ Download monthly'}</button>
+          <button className="btn w-full" disabled={busy === 'month'} onClick={() => go('month', { type: 'month', month })}>{busy === 'month' ? 'Preparing…' : '⬇ Download monthly'}</button>
         </Card>
         <Card title="👤 One person" sub="Complete history of one individual with breaks, for a month or any date range.">
           {person ? (
-            <div className="mb-3 flex items-center gap-2 rounded-xl bg-slate-50 p-2 text-sm"><Avatar userId={person.id} name={person.displayName} size={28} /><b className="truncate">{person.displayName}</b><button className="ml-auto text-slate-400" onClick={() => setPerson(null)} aria-label="Clear person">✕</button></div>
+            <div className="mb-3 flex items-center gap-2 rounded-xl bg-slate-50 p-2 text-sm">
+              <Avatar userId={person.id} name={person.displayName} size={28} />
+              <b className="truncate">{person.displayName}</b>
+              {person.role && <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-700">{ROLE_LABEL[person.role] ?? person.role}</span>}
+              <button className="ml-auto text-slate-400" onClick={() => setPerson(null)} aria-label="Clear person">✕</button>
+            </div>
           ) : (
             <div className="relative mb-3">
               <input className="input" placeholder="Search a person…" value={find} onChange={(e) => setFind(e.target.value)} aria-label="Find person" />
-              {people.length > 0 && <ul className="absolute z-10 mt-1 w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">{people.map((p) => <li key={p.id}><button className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-slate-50" onClick={() => { setPerson(p); setFind(''); setPeople([]); }}><Avatar userId={p.id} name={p.displayName} size={24} />{p.displayName}<span className="ml-auto truncate text-xs text-slate-400">{p.email}</span></button></li>)}</ul>}
+              {people.length > 0 && <ul className="absolute z-10 mt-1 w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">{people.map((p) => <li key={p.id}><button className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-slate-50" onClick={() => { setPerson(p); setFind(''); setPeople([]); }}><Avatar userId={p.id} name={p.displayName} size={24} /><span className="truncate">{p.displayName}</span><span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">{ROLE_LABEL[p.role] ?? p.role}</span><span className="ml-auto truncate text-xs text-slate-400">{p.email}</span></button></li>)}</ul>}
             </div>
           )}
           <label className="mb-2 flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" checked={range} onChange={(e) => setRange(e.target.checked)} /> Custom date range</label>
           {range ? <div className="mb-3 grid grid-cols-2 gap-2"><input className="input" type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} aria-label="From" /><input className="input" type="date" value={to} min={from} max={todayStr()} onChange={(e) => setTo(e.target.value)} aria-label="To" /></div>
             : <input className="input mb-3" type="month" max={todayStr().slice(0, 7)} value={pMonth} onChange={(e) => setPMonth(e.target.value)} aria-label="Month" />}
-          <button className="btn w-full" disabled={!person || busy === 'person'} onClick={() => go('person', `type=person&userId=${person!.id}&${range ? `from=${from}&to=${to}` : `month=${pMonth}`}`)}>{busy === 'person' ? 'Preparing…' : '⬇ Download person'}</button>
+          <button className="btn w-full" disabled={!person || busy === 'person'} onClick={() => go('person', range ? { type: 'person', userId: person!.id, from, to } : { type: 'person', userId: person!.id, month: pMonth })}>{busy === 'person' ? 'Preparing…' : '⬇ Download person'}</button>
         </Card>
       </div>
     </div>
@@ -423,13 +501,19 @@ export default function AttendancePage() {
   const [open, setOpen] = useState<BoardRow | null>(null);
   const [edit, setEdit] = useState<{ userId: string; name: string; day: string; status?: string; checkInAt?: string | null; checkOutAt?: string | null } | null>(null);
   const [tick, setTick] = useState(0);
-  const staff = !!user && ['ADMIN', 'TEAM_LEAD', 'COORDINATOR'].includes(user.role);
+  const isOrg = !!user && (user.role === 'ADMIN' || user.role === 'HR_MANAGER');
+  const staff = !!user && ['ADMIN', 'HR_MANAGER', 'TEAM_LEAD', 'COORDINATOR'].includes(user.role);
   const canEdit = !!user && (user.role === 'ADMIN' || user.role === 'TEAM_LEAD');
 
-  useEffect(() => { if (staff) { const q = new URLSearchParams(window.location.search); if (q.get('summary') || q.get('nudge') || q.get('team') || q.get('board')) setTab('board'); } }, [staff]);
+  useEffect(() => {
+    if (!staff) return;
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('tab') === 'export') setTab('export');
+    else if (q.get('tab') === 'board' || q.get('summary') || q.get('nudge') || q.get('team') || q.get('board')) setTab('board');
+  }, [staff]);
 
   if (loading || !user) return <Loading />;
-  const tabs = [{ k: 'mine', l: 'My attendance' }, ...(staff ? [{ k: 'board', l: user.role === 'ADMIN' ? 'Everyone — live board' : 'My team — live board' }, { k: 'export', l: 'Download reports' }] : [])] as { k: typeof tab; l: string }[];
+  const tabs = [{ k: 'mine', l: 'My attendance' }, ...(staff ? [{ k: 'board', l: isOrg ? 'Everyone — live board' : 'My team — live board' }, { k: 'export', l: 'Download reports' }] : [])] as { k: typeof tab; l: string }[];
 
   return (
     <div>
@@ -446,19 +530,25 @@ export default function AttendancePage() {
           <section className="card"><h2 className="h2">My month</h2><MonthView key={`me${a.today?.record?.checkInAt ?? ''}${a.today?.record?.checkOutAt ?? ''}`} userId={user.id} canExport /></section>
         </div>
       )}
-      {tab === 'board' && staff && <BoardView key={tick} isAdmin={user.role === 'ADMIN'} onOpen={setOpen} />}
-      {tab === 'export' && staff && <ExportPanel isAdmin={user.role === 'ADMIN'} />}
+      {tab === 'board' && staff && <BoardView key={tick} isOrg={isOrg} onOpen={setOpen} />}
+      {tab === 'export' && staff && <ExportPanel isOrg={isOrg} myTeamId={user.teamId} />}
 
       <Modal open={!!open} onClose={() => setOpen(null)} title={open?.name ?? ''}>
         {open && (
           <div className="space-y-3">
-            <div className="flex items-center gap-3"><Avatar userId={open.userId} name={open.name} size={52} /><div><p className="font-semibold text-ink-900">{open.name}</p><p className="text-xs text-slate-500">{open.email} · {open.teamName ?? 'No team'}</p></div></div>
+            <div className="flex items-center gap-3">
+              <Avatar userId={open.userId} name={open.name} size={52} />
+              <div>
+                <p className="font-semibold text-ink-900">{open.name}</p>
+                <p className="text-xs text-slate-500">{ROLE_LABEL[open.role] ?? open.role} · {open.email} · {open.teamName ?? 'No team'}{open.batchName ? ` · ${open.batchName}` : ''}</p>
+              </div>
+            </div>
             <div className="rounded-xl bg-slate-50 p-3 text-sm text-slate-600">
               <p><b className={`rounded-full px-2 py-0.5 text-xs ${STATE_PILL[open.state]}`}>{label(open)}</b> {open.checkInAt && <>In {fmtTime(open.checkInAt)} · Out {open.checkOutAt ? fmtTime(open.checkOutAt) : '—'} · {fmtDur(open.workedMinutes)} worked</>}</p>
               {open.note && <p className="mt-1">Note: {open.note}</p>}
               {open.breaks.map((b, i) => <p key={i} className="text-xs">{BREAK_EMOJI[b.reason]} {BREAK_LABEL[b.reason]} {fmtTime(b.startAt)}–{b.endAt ? fmtTime(b.endAt) : '…'} ({fmtDur(b.minutes)}){b.note ? ` · ${b.note}` : ''}</p>)}
             </div>
-            <MonthView userId={open.userId} canExport={canEdit || user.role === 'COORDINATOR' || user.role === 'ADMIN'} onEdit={canEdit ? (d) => { setEdit({ userId: open.userId, name: open.name, day: d.day, checkInAt: d.checkInAt, checkOutAt: d.checkOutAt }); setOpen(null); } : undefined} />
+            <MonthView userId={open.userId} canExport={staff} onEdit={canEdit ? (d) => { setEdit({ userId: open.userId, name: open.name, day: d.day, checkInAt: d.checkInAt, checkOutAt: d.checkOutAt }); setOpen(null); } : undefined} />
             {canEdit && <button className="btn-secondary w-full" onClick={() => { setEdit({ userId: open.userId, name: open.name, day: open.day, checkInAt: open.checkInAt, checkOutAt: open.checkOutAt }); setOpen(null); }}>Correct {open.day === todayStr() ? 'today' : open.day}…</button>}
           </div>
         )}

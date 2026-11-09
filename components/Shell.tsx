@@ -51,7 +51,8 @@ const HR_MANAGER_GROUPS: { title: string; items: { href: string; label: string; 
   {
     title: 'HR Visibility',
     items: [
-      { href: '/hr-manager/attendance', label: 'Attendance', icon: 'clock' },
+      { href: '/hr-manager/attendance', label: 'Org Attendance', icon: 'clock' },
+      { href: '/attendance', label: 'My Attendance', icon: 'clock' },
       { href: '/hr-manager/login-activity', label: 'Login Activity', icon: 'activity' },
       { href: '/hr-manager/leaves', label: 'Leave Management', icon: 'leave' },
     ],
@@ -79,6 +80,7 @@ const HR_SUPPORT_GROUPS: { title: string; items: { href: string; label: string; 
   {
     title: 'Workspace',
     items: [
+      { href: '/attendance', label: 'My Attendance', icon: 'clock' },
       { href: '/channels', label: 'Groups', icon: 'chat' },
       { href: '/reports', label: 'Daily Reports', icon: 'reports' },
       { href: '/profile', label: 'Profile', icon: 'user' },

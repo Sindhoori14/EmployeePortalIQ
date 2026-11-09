@@ -17,9 +17,10 @@ const PAGES: { href: string; label: string; roles?: string[]; keys: string }[] =
   { href: '/goals', label: 'Goals', keys: 'okr weekly' },
   { href: '/channels', label: 'Workspace', keys: 'message channel talk' },
   { href: '/announcements', label: 'Announcements', keys: 'news notice' },
+  { href: '/hr-manager/attendance', label: 'Organization Attendance', roles: ['ADMIN', 'HR_MANAGER'], keys: 'attendance oversight export csv excel' },
   { href: '/teams', label: 'Teams', roles: ['ADMIN', 'TEAM_LEAD', 'COORDINATOR'], keys: 'group' },
   { href: '/users', label: 'People', roles: ['ADMIN', 'TEAM_LEAD'], keys: 'users add import reset password' },
-  { href: '/settings', label: 'Settings', roles: ['ADMIN'], keys: 'deadline holidays working days' },
+  { href: '/settings', label: 'Settings', keys: 'deadline holidays working days password security preferences' },
   { href: '/audit', label: 'Audit log', roles: ['ADMIN'], keys: 'history security activity' },
   { href: '/change-password', label: 'Change my password', keys: 'security' },
 ];
@@ -53,7 +54,9 @@ export function CommandPalette() {
     if (!open || !user || q.trim().length < 2) { setTasks([]); setPeople([]); return; }
     const t = setTimeout(() => {
       api<{ data: any[] }>(`/tasks?limit=5&search=${encodeURIComponent(q.trim())}`).then((r) => setTasks(r.data)).catch(() => setTasks([]));
-      if (user.role !== 'EMPLOYEE') api<{ data: any[] }>(`/users?limit=5&search=${encodeURIComponent(q.trim())}`).then((r) => setPeople(r.data)).catch(() => setPeople([]));
+      if (user.role !== 'EMPLOYEE' && user.role !== 'HR_SUPPORT') {
+        api<{ data: any[] }>(`/users?limit=5&search=${encodeURIComponent(q.trim())}`).then((r) => setPeople(r.data)).catch(() => setPeople([]));
+      }
     }, 250);
     return () => clearTimeout(t);
   }, [q, open, user]);
@@ -61,10 +64,24 @@ export function CommandPalette() {
   const cmds = useMemo<Cmd[]>(() => {
     if (!user) return [];
     const go = (href: string) => () => { setOpen(false); router.push(href); };
+    const resolveHref = (href: string) => {
+      if (href === '/settings') {
+        if (user.role === 'HR_MANAGER') return '/hr-manager/settings';
+        if (user.role === 'HR_SUPPORT') return '/hr-support/settings';
+      }
+      if (href === '/dashboard') {
+        if (user.role === 'HR_MANAGER') return '/hr-manager/dashboard';
+        if (user.role === 'HR_SUPPORT') return '/hr-support/dashboard';
+      }
+      return href;
+    };
     const needle = q.trim().toLowerCase();
     const pages: Cmd[] = PAGES.filter((p) => !p.roles || p.roles.includes(user.role) || user.role === 'ADMIN')
       .filter((p) => !needle || `${p.label} ${p.keys}`.toLowerCase().includes(needle))
-      .map((p) => ({ id: p.href, label: p.label, group: 'Go to', run: go(p.href) }));
+      .map((p) => {
+        const href = resolveHref(p.href);
+        return { id: href, label: p.label, group: 'Go to', run: go(href) };
+      });
     const t: Cmd[] = tasks.map((x) => ({ id: `t${x.id}`, label: x.title, hint: x.owner?.displayName, group: 'Tasks', run: go(`/tasks/${x.id}`) }));
     const pe: Cmd[] = people.map((x) => ({ id: `p${x.id}`, label: x.displayName, hint: ROLE_LABEL[x.role], group: 'People', run: go(`/users?focus=${x.id}`) }));
     const acts: Cmd[] = [];

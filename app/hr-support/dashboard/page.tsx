@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { api } from '../../../lib/api';
 import { useRequireAuth } from '../../../lib/auth-context';
 import { Loading, PageHeader, Stat } from '../../../components/ui';
+import { useMyAttendance } from '../../../components/AttendanceProvider';
 
 interface HrSupportOverview {
   totalAssignedRequirements: number;
@@ -20,6 +21,7 @@ interface HrSupportOverview {
 
 export default function HrSupportDashboardPage() {
   const { user, loading } = useRequireAuth(['HR_SUPPORT', 'ADMIN']);
+  const att = useMyAttendance();
 
   const [data, setData] = useState<HrSupportOverview | null>(null);
   const [err, setErr] = useState('');
@@ -60,6 +62,12 @@ export default function HrSupportDashboardPage() {
       </PageHeader>
 
       {err && <p className="err">{err}</p>}
+
+      {att.today && att.today.workingDay && !att.today.record && (
+        <Link href="/attendance" className="flex items-center gap-3 rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-800 transition hover:bg-orange-100">
+          <span className="text-xl">🕘</span><span><b>You have not checked in yet.</b> Tap to mark your attendance.</span><span className="ml-auto font-semibold">Check in →</span>
+        </Link>
+      )}
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
