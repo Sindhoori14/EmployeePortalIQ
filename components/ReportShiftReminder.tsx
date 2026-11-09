@@ -9,6 +9,7 @@ function playReminderChime() {
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioCtx) return;
     const ctx = new AudioCtx();
+    if (ctx.state === 'suspended') { ctx.resume().catch(() => {}); }
     const now = ctx.currentTime;
 
     const osc = ctx.createOscillator();
@@ -37,8 +38,6 @@ export function ReportShiftReminder() {
   useTick(15_000);
 
   if (!user || dismissed) return null;
-  // Only employees and team leads who need to submit daily reports
-  if (user.role === 'ADMIN') return null;
 
   // Must have today's attendance record, be currently working, and not have submitted report
   if (!today || !today.config?.shiftEnd) return null;
@@ -50,13 +49,13 @@ export function ReportShiftReminder() {
   const shiftEnd = today.config.shiftEnd;
   const minutesUntilEnd = shiftEnd - currentMinOfDay;
 
-  // Alert when within 5 minutes before shift ends (and up to 60 minutes after if still working)
-  const isTimeForAlert = minutesUntilEnd <= 5 && minutesUntilEnd >= -60;
+  // Alert when within 5 minutes before shift ends (and up to 120 minutes after if still working)
+  const isTimeForAlert = minutesUntilEnd <= 5 && minutesUntilEnd >= -120;
 
   if (!isTimeForAlert) return null;
 
-  // Sound chime once when alert triggers
-  if (!alertedRef.current && minutesUntilEnd <= 5 && minutesUntilEnd >= 0) {
+  // Sound chime once when alert triggers within 5 minutes before shift ends
+  if (!alertedRef.current && minutesUntilEnd <= 5) {
     alertedRef.current = true;
     playReminderChime();
   }

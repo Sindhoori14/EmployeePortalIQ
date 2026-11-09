@@ -28,12 +28,18 @@ export default function ProjectsPage() {
   const [fetching, setFetching] = useState(true);
   const [err, setErr] = useState('');
   const [open, setOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [busy, setBusy] = useState(false);
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [users, setUsers] = useState<UserRow[]>([]);
-  const [form, setForm] = useState({ name: '', description: '', teamId: '', ownerId: '', startDate: '', dueDate: '' });
 
-  const canCreate = user?.role === 'ADMIN' || user?.role === 'TEAM_LEAD' || user?.role === 'COORDINATOR';
+  // Create form
+  const [form, setForm] = useState({ name: '', description: '', teamId: '', ownerId: '', startDate: '', dueDate: '' });
+  // Edit form
+  const [editForm, setEditForm] = useState({ name: '', description: '', status: 'ACTIVE', ownerId: '', startDate: '', dueDate: '' });
+
+  const canManage = user?.role === 'ADMIN' || user?.role === 'TEAM_LEAD';
 
   async function load() {
     try { setRows(await api<Project[]>('/projects')); }
@@ -43,13 +49,13 @@ export default function ProjectsPage() {
   useEffect(() => { if (user) void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [user]);
 
   useEffect(() => {
-    if (!open || !canCreate || !user) return;
+    if ((!open && !editOpen) || !canManage || !user) return;
     if (user.role === 'ADMIN') api<TeamRow[]>('/teams').then(setTeams).catch(() => {});
-    const teamId = user.role === 'ADMIN' ? form.teamId : user.teamId ?? '';
+    const teamId = user.role === 'ADMIN' ? (form.teamId || editingProject?.teamId || '') : user.teamId ?? '';
     if (teamId) api<{ data: UserRow[] }>(`/users?teamId=${teamId}&active=true&limit=100`).then((r) => setUsers(r.data)).catch(() => setUsers([]));
-    else setUsers([]);
+    else api<{ data: UserRow[] }>('/users?active=true&limit=100').then((r) => setUsers(r.data)).catch(() => setUsers([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, form.teamId, user, canCreate]);
+  }, [open, editOpen, form.teamId, editingProject, user, canManage]);
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
@@ -69,20 +75,76 @@ export default function ProjectsPage() {
     finally { setBusy(false); }
   }
 
+  function startEdit(p: Project, e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setEditingProject(p);
+    setEditForm({
+      name: p.name,
+      description: p.description || '',
+      status: p.status,
+      ownerId: p.owner?.id || '',
+      startDate: p.startDate ? p.startDate.slice(0, 10) : '',
+      dueDate: p.dueDate ? p.dueDate.slice(0, 10) : '',
+    });
+    setEditOpen(true);
+  }
+
+  async function updateProject(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingProject) return;
+    setErr(''); setBusy(true);
+    try {
+      await api(`/projects/${editingProject.id}`, {
+        method: 'PATCH',
+        body: {
+          name: editForm.name,
+          description: editForm.description || undefined,
+          status: editForm.status,
+          ownerId: editForm.ownerId || undefined,
+          startDate: editForm.startDate ? new Date(editForm.startDate).toISOString() : undefined,
+          dueDate: editForm.dueDate ? new Date(editForm.dueDate).toISOString() : undefined,
+        },
+      });
+      setEditOpen(false);
+      setEditingProject(null);
+      await load();
+    } catch (ex) {
+      setErr(ex instanceof ApiError ? ex.message : 'Update failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteProject(p: Project, e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!confirm(`Are you sure you want to delete project "${p.name}"? Tasks associated with this project will be kept.`)) {
+      return;
+    }
+    setErr('');
+    try {
+      await api(`/projects/${p.id}`, { method: 'DELETE' });
+      await load();
+    } catch (ex) {
+      setErr(ex instanceof ApiError ? ex.message : 'Delete failed');
+    }
+  }
+
   if (loading || !user) return <Loading />;
 
   return (
     <div className="space-y-5">
       <PageHeader title="Projects" sub="Group tasks into projects and watch progress.">
-        {canCreate && <button className="btn" onClick={() => setOpen(true)}>+ New project</button>}
+        {canManage && <button className="btn" onClick={() => setOpen(true)}>+ New project</button>}
       </PageHeader>
-      {err && !open && <p className="err">{err}</p>}
+      {err && !open && !editOpen && <p className="err">{err}</p>}
       {fetching ? <Loading /> : rows.length === 0 ? (
         <div className="card"><Empty text="No projects yet." /></div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {rows.map((p) => (
-            <Link key={p.id} href={`/projects/${p.id}`} className="card transition hover:-translate-y-0.5 hover:shadow-md">
+            <Link key={p.id} href={`/projects/${p.id}`} className="card relative transition hover:-translate-y-0.5 hover:shadow-md">
               <div className="flex items-start gap-2">
                 <h2 className="min-w-0 flex-1 truncate font-semibold text-ink-900">{p.name}</h2>
                 <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${STATUS_TONE[p.status] ?? 'bg-slate-100 text-slate-500'}`}>{p.status}</span>
@@ -92,15 +154,37 @@ export default function ProjectsPage() {
                 <div className="h-full rounded-full bg-brand-600" style={{ width: `${p.progress}%` }} />
               </div>
               <p className="mt-1.5 text-xs text-slate-500">{p.doneCount} of {p.taskCount} tasks done · {p.progress}%</p>
+              
               <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
                 {p.owner && <><Avatar userId={p.owner.id} name={p.owner.displayName} size={22} /><span className="truncate">{p.owner.displayName}</span></>}
                 <span className="ml-auto shrink-0">{p.dueDate ? `Due ${fmtDate(p.dueDate)}` : p.team?.name ?? p.batch?.name ?? ''}</span>
               </div>
+
+              {/* Edit and Delete action buttons for Admin and Team Lead */}
+              {canManage && (
+                <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-2.5">
+                  <button
+                    type="button"
+                    onClick={(e) => startEdit(p, e)}
+                    className="rounded-lg px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 hover:text-ink-900 transition"
+                  >
+                    ✏️ Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => deleteProject(p, e)}
+                    className="rounded-lg px-2.5 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 hover:text-red-700 transition"
+                  >
+                    🗑️ Delete
+                  </button>
+                </div>
+              )}
             </Link>
           ))}
         </div>
       )}
 
+      {/* New Project Modal */}
       <Modal open={open} onClose={() => setOpen(false)} title="New project">
         <form onSubmit={create} className="space-y-3">
           <div><label className="label">Name</label><input className="input" required maxLength={120} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Placement drive" /></div>
@@ -121,6 +205,38 @@ export default function ProjectsPage() {
           </div>
           {err && <p className="err">{err}</p>}
           <button className="btn w-full" disabled={busy}>{busy ? 'Creating…' : 'Create project'}</button>
+        </form>
+      </Modal>
+
+      {/* Edit Project Modal */}
+      <Modal open={editOpen} onClose={() => setEditOpen(false)} title={`Edit project: ${editingProject?.name ?? ''}`}>
+        <form onSubmit={updateProject} className="space-y-3">
+          <div><label className="label">Name</label><input className="input" required maxLength={120} value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} /></div>
+          <div><label className="label">Description (optional)</label><textarea className="input" rows={3} value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Status</label>
+              <select className="input" value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}>
+                <option value="ACTIVE">ACTIVE</option>
+                <option value="PAUSED">PAUSED</option>
+                <option value="DONE">DONE</option>
+                <option value="ARCHIVED">ARCHIVED</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Owner (optional)</label>
+              <select className="input" value={editForm.ownerId} onChange={(e) => setEditForm({ ...editForm, ownerId: e.target.value })}>
+                <option value="">No owner</option>{users.map((u) => <option key={u.id} value={u.id}>{u.displayName}</option>)}
+              </select>
+            </div>
+            <div><label className="label">Start date</label><input className="input" type="date" value={editForm.startDate} onChange={(e) => setEditForm({ ...editForm, startDate: e.target.value })} /></div>
+            <div><label className="label">Due date</label><input className="input" type="date" value={editForm.dueDate} onChange={(e) => setEditForm({ ...editForm, dueDate: e.target.value })} /></div>
+          </div>
+          {err && <p className="err">{err}</p>}
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" className="btn-secondary" onClick={() => setEditOpen(false)}>Cancel</button>
+            <button className="btn" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button>
+          </div>
         </form>
       </Modal>
     </div>

@@ -19,6 +19,18 @@ export class CreateTicketDto {
 }
 
 export class UpdateTicketDto {
+  @IsOptional() @IsString() @MinLength(3) @MaxLength(200)
+  subject?: string;
+
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(10000)
+  description?: string;
+
+  @IsOptional() @IsIn(['WORK', 'ACCESS', 'ATTENDANCE', 'TECHNICAL', 'OTHER'])
+  category?: 'WORK' | 'ACCESS' | 'ATTENDANCE' | 'TECHNICAL' | 'OTHER';
+
+  @IsOptional() @IsIn(['LOW', 'MEDIUM', 'HIGH', 'URGENT'])
+  priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
+
   @IsOptional() @IsIn(['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'])
   status?: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
 

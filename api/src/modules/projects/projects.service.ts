@@ -133,4 +133,15 @@ export class ProjectsService {
     await this.audit.log({ actorId: me.id, action: 'PROJECT_UPDATE', entity: 'project', entityId: id, metadata: dto as any, ip });
     return this.wire(updated);
   }
+
+  async delete(me: RequestUser, id: string, ip?: string) {
+    const p = await this.prisma.project.findUnique({ where: { id } });
+    if (!p) throw new NotFoundException('Project not found');
+    const canDelete = me.role === 'ADMIN' || (me.role === 'TEAM_LEAD' && (!p.teamId || p.teamId === me.teamId || p.ownerId === me.id || p.createdById === me.id));
+    if (!canDelete) throw new ForbiddenException('Forbidden');
+    await this.prisma.task.updateMany({ where: { projectId: id }, data: { projectId: null } });
+    await this.prisma.project.delete({ where: { id } });
+    await this.audit.log({ actorId: me.id, action: 'PROJECT_DELETE', entity: 'project', entityId: id, ip });
+    return { ok: true };
+  }
 }

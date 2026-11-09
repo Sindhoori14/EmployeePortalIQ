@@ -31,6 +31,14 @@ export class CreateTaskDto {
   @IsString()
   projectId?: string;
 
+  @IsOptional()
+  @IsString()
+  role?: string;
+
+  @IsOptional()
+  @IsIn(['true'])
+  leadOnly?: string;
+
   @IsString()
   ownerId!: string;
 

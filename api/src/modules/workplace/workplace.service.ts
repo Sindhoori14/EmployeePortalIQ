@@ -5,7 +5,8 @@ import { NotificationsService } from '../comms/notifications.service';
 import { WorkCalendarService } from '../../common/work-calendar.service';
 import { RequestUser } from '../../common/decorators/current-user.decorator';
 import { dayStr, dayToDate, addDays } from '../../common/time';
-import { CreateMeetingDto, RequestLeaveDto, CreateCalendarEventDto, UpdateCalendarEventDto } from './dto/workplace.dto';
+import { CreateMeetingDto, UpdateMeetingDto, RequestLeaveDto, CreateCalendarEventDto, UpdateCalendarEventDto } from './dto/workplace.dto';
+import { Prisma } from '@prisma/client';
 
 const LEAD_ROLES = ['ADMIN', 'TEAM_LEAD'];
 
@@ -30,34 +31,133 @@ export class WorkplaceService {
   // ---------------- meetings ----------------
   async createMeeting(me: RequestUser, dto: CreateMeetingDto, ip?: string) {
     if (!LEAD_ROLES.includes(me.role)) throw new ForbiddenException('Only leads and admins schedule meetings');
-    const teamId = dto.teamId ?? null;
+    let teamId = dto.teamId ?? null;
+    const targetScope = dto.targetScope ?? (teamId ? 'TEAM' : 'ALL');
+
+    if (me.role === 'TEAM_LEAD') {
+      if (!teamId && me.teamId) teamId = me.teamId;
+      if (teamId && me.teamId && teamId !== me.teamId) {
+        throw new ForbiddenException('Team Leads can only schedule meetings for their own team');
+      }
+    }
+
     if (teamId) {
       const t = await this.prisma.team.findUnique({ where: { id: teamId } });
       if (!t) throw new BadRequestException('Invalid teamId');
-      if (me.role === 'TEAM_LEAD' && me.teamId !== teamId) throw new ForbiddenException('Outside your team');
-    } else if (me.role !== 'ADMIN') {
-      throw new ForbiddenException('Company meetings are admin-only');
     }
+
     if (!isHttpUrl(dto.meetUrl)) throw new BadRequestException('meetUrl must be an http(s) link');
     const startsAt = new Date(dto.startsAt);
     if (isNaN(startsAt.getTime())) throw new BadRequestException('Invalid startsAt');
     const endsAt = dto.endsAt ? new Date(dto.endsAt) : null;
     if (endsAt && (isNaN(endsAt.getTime()) || endsAt <= startsAt)) throw new BadRequestException('endsAt must be after startsAt');
+
+    let parentId = `SCOPE:${targetScope}`;
+    if (targetScope === 'INDIVIDUAL' && dto.targetUserId) {
+      parentId = `SCOPE:INDIVIDUAL:${dto.targetUserId}`;
+    } else if (targetScope === 'CUSTOM' && dto.targetUserIds?.length) {
+      parentId = `SCOPE:CUSTOM:${dto.targetUserIds.join(',')}`;
+    }
+
     const m = await this.prisma.meeting.create({
       data: {
-        teamId, title: dto.title.trim(), meetUrl: dto.meetUrl.trim(), startsAt, endsAt,
-        recurrence: dto.recurrence ?? 'NONE', createdById: me.id,
+        teamId: targetScope === 'TEAM' || targetScope === 'CUSTOM' ? teamId : null,
+        title: dto.title.trim(),
+        meetUrl: dto.meetUrl.trim(),
+        startsAt,
+        endsAt,
+        recurrence: dto.recurrence ?? 'NONE',
+        parentId,
+        createdById: me.id,
       },
     });
-    const ids = await this.scopeUserIds(teamId, me.id);
-    await this.notifications.notify(ids, {
-      type: 'ANNOUNCEMENT', title: `Meeting: ${m.title}`, body: `Join at ${startsAt.toLocaleString()}`, link: '/dashboard',
-    });
+
+    let notifyIds: string[] = [];
+    if (targetScope === 'TEAM' && teamId) {
+      notifyIds = await this.scopeUserIds(teamId, me.id);
+    } else if (targetScope === 'TEAM_LEADS') {
+      const tls = await this.prisma.user.findMany({
+        where: { isActive: true, role: { in: ['TEAM_LEAD', 'ADMIN'] }, id: { not: me.id } },
+        select: { id: true },
+      });
+      notifyIds = tls.map((t) => t.id);
+    } else if (targetScope === 'INDIVIDUAL' && dto.targetUserId) {
+      notifyIds = [dto.targetUserId];
+    } else if (targetScope === 'CUSTOM' && dto.targetUserIds?.length) {
+      notifyIds = dto.targetUserIds.filter((id) => id !== me.id);
+    } else {
+      notifyIds = await this.scopeUserIds(null, me.id);
+    }
+
+    if (notifyIds.length) {
+      await this.notifications.notify(notifyIds, {
+        type: 'ANNOUNCEMENT',
+        title: `Meeting: ${m.title}`,
+        body: `Join at ${startsAt.toLocaleString()}`,
+        link: '/dashboard',
+      });
+    }
+
     await this.audit.log({ actorId: me.id, action: 'MEETING_CREATE', entity: 'meeting', entityId: m.id, ip });
     return m;
   }
 
-  listMeetings(me: RequestUser, scope: 'upcoming' | 'past' | 'all' = 'upcoming') {    const now = new Date();
+  async updateMeeting(me: RequestUser, id: string, dto: UpdateMeetingDto, ip?: string) {
+    if (!LEAD_ROLES.includes(me.role)) throw new ForbiddenException('Only leads and admins can edit meetings');
+    const m = await this.prisma.meeting.findUnique({ where: { id } });
+    if (!m) throw new NotFoundException('Meeting not found');
+
+    const canEdit =
+      me.role === 'ADMIN' ||
+      m.createdById === me.id ||
+      (me.role === 'TEAM_LEAD' && m.teamId && me.teamId === m.teamId);
+    if (!canEdit) throw new ForbiddenException('Forbidden: You cannot edit this meeting');
+
+    const data: Prisma.MeetingUpdateInput = {};
+    if (dto.title) data.title = dto.title.trim();
+    if (dto.meetUrl) {
+      if (!isHttpUrl(dto.meetUrl)) throw new BadRequestException('meetUrl must be a valid http(s) link');
+      data.meetUrl = dto.meetUrl.trim();
+    }
+    if (dto.startsAt) {
+      const startsAt = new Date(dto.startsAt);
+      if (isNaN(startsAt.getTime())) throw new BadRequestException('Invalid startsAt');
+      data.startsAt = startsAt;
+    }
+    if (dto.endsAt !== undefined) {
+      data.endsAt = dto.endsAt ? new Date(dto.endsAt) : null;
+    }
+    if (dto.recurrence) data.recurrence = dto.recurrence;
+
+    if (dto.targetScope) {
+      let parentId = `SCOPE:${dto.targetScope}`;
+      if (dto.targetScope === 'INDIVIDUAL' && dto.targetUserId) {
+        parentId = `SCOPE:INDIVIDUAL:${dto.targetUserId}`;
+      } else if (dto.targetScope === 'CUSTOM' && dto.targetUserIds?.length) {
+        parentId = `SCOPE:CUSTOM:${dto.targetUserIds.join(',')}`;
+      }
+      data.parentId = parentId;
+      data.team = (dto.targetScope === 'TEAM' || dto.targetScope === 'CUSTOM') && dto.teamId
+        ? { connect: { id: dto.teamId } }
+        : { disconnect: true };
+    } else if (dto.teamId !== undefined) {
+      data.team = dto.teamId ? { connect: { id: dto.teamId } } : { disconnect: true };
+    }
+
+    const updated = await this.prisma.meeting.update({
+      where: { id },
+      data,
+      include: {
+        team: { select: { id: true, name: true } },
+        createdBy: { select: { id: true, displayName: true, email: true } },
+      },
+    });
+    await this.audit.log({ actorId: me.id, action: 'MEETING_UPDATE', entity: 'meeting', entityId: id, ip });
+    return updated;
+  }
+
+  async listMeetings(me: RequestUser, scope: 'upcoming' | 'past' | 'all' = 'upcoming') {
+    const now = new Date();
     const hourAgo = new Date(now.getTime() - 60 * 60 * 1000);
     const scopeWhere =
       scope === 'upcoming'
@@ -65,22 +165,55 @@ export class WorkplaceService {
         : scope === 'past'
           ? { OR: [{ endsAt: null, startsAt: { lt: hourAgo } }, { endsAt: { lt: now } }] }
           : {};
-    const teamScope = [{ teamId: null }, ...(me.teamId ? [{ teamId: me.teamId }] : []), ...(me.role === 'ADMIN' || me.role === 'TEAM_LEAD' ? [{}] : [])];
-    return this.prisma.meeting.findMany({
+
+    const all = await this.prisma.meeting.findMany({
       where: {
-        recurrence: 'NONE', // templates never listed; their daily instances are
-        AND: [{ OR: teamScope }, scopeWhere],
+        recurrence: 'NONE',
+        ...scopeWhere,
       },
       orderBy: scope === 'past' ? { startsAt: 'desc' } : { startsAt: 'asc' },
-      take: 50,
-      include: { team: { select: { id: true, name: true } } },
+      take: 100,
+      include: {
+        team: { select: { id: true, name: true } },
+        createdBy: { select: { id: true, displayName: true, email: true } },
+      },
+    });
+
+    return all.filter((m) => {
+      if (me.role === 'ADMIN') return true;
+      if (m.createdById === me.id) return true;
+
+      const p = m.parentId ?? 'SCOPE:ALL';
+      if (p === 'SCOPE:ALL' || !p.startsWith('SCOPE:')) {
+        if (!m.teamId) return true;
+        return m.teamId === me.teamId;
+      }
+      if (p === 'SCOPE:TEAM_LEADS') {
+        return me.role === 'TEAM_LEAD';
+      }
+      if (p === 'SCOPE:TEAM') {
+        return Boolean(m.teamId && m.teamId === me.teamId);
+      }
+      if (p.startsWith('SCOPE:INDIVIDUAL:')) {
+        const targetId = p.replace('SCOPE:INDIVIDUAL:', '');
+        return targetId === me.id;
+      }
+      if (p.startsWith('SCOPE:CUSTOM:')) {
+        const ids = p.replace('SCOPE:CUSTOM:', '').split(',').map((x) => x.trim());
+        return ids.includes(me.id);
+      }
+      return !m.teamId || m.teamId === me.teamId;
     });
   }
 
-  async deleteMeeting(me: RequestUser, id: string, ip?: string) {    const m = await this.prisma.meeting.findUnique({ where: { id } });
+  async deleteMeeting(me: RequestUser, id: string, ip?: string) {
+    const m = await this.prisma.meeting.findUnique({ where: { id } });
     if (!m) throw new NotFoundException('Meeting not found');
-    if (me.role !== 'ADMIN' && (m.createdById !== me.id || (m.teamId && me.teamId !== m.teamId)))
-      throw new ForbiddenException('Forbidden');
+    const canDelete =
+      me.role === 'ADMIN' ||
+      m.createdById === me.id ||
+      (me.role === 'TEAM_LEAD' && m.teamId && me.teamId === m.teamId);
+    if (!canDelete) throw new ForbiddenException('Forbidden: You cannot delete this meeting');
     await this.prisma.meeting.delete({ where: { id } });
     await this.audit.log({ actorId: me.id, action: 'MEETING_DELETE', entity: 'meeting', entityId: id, ip });
     return { ok: true };
