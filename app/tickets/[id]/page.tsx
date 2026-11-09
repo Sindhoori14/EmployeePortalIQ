@@ -1,10 +1,10 @@
 'use client';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { api, ApiError, timeAgo } from '../../../lib/api';
 import { useRequireAuth } from '../../../lib/auth-context';
-import { Avatar, Loading } from '../../../components/ui';
+import { Avatar, Loading, Modal } from '../../../components/ui';
 
 interface Message { id: string; body: string; createdAt: string; author: { id: string; displayName: string; role: string } }
 interface Ticket {
@@ -22,6 +22,7 @@ const STATUSES = ['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'];
 export default function TicketDetailPage() {
   const { user, loading } = useRequireAuth();
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const [t, setT] = useState<Ticket | null>(null);
   const [err, setErr] = useState('');
   const [reply, setReply] = useState('');
@@ -29,10 +30,21 @@ export default function TicketDetailPage() {
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
 
+  // Edit ticket modal state
+  const [editOpen, setEditOpen] = useState(false);
+  const [editForm, setEditForm] = useState({ subject: '', description: '', category: 'WORK', priority: 'MEDIUM', status: 'OPEN' });
+
   async function load() {
     try {
       const data = await api<Ticket>(`/tickets/${params.id}`);
       setT(data); setStatus(data.status); setResolution(data.resolution ?? ''); setErr('');
+      setEditForm({
+        subject: data.subject,
+        description: data.description,
+        category: data.category,
+        priority: data.priority,
+        status: data.status,
+      });
     } catch (e) { setErr(e instanceof ApiError ? e.message : 'Could not load ticket'); }
   }
   useEffect(() => { if (user) void load(); // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -54,17 +66,68 @@ export default function TicketDetailPage() {
     finally { setBusy(false); }
   }
 
+  async function updateTicket(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true); setErr('');
+    try {
+      await api(`/tickets/${params.id}`, {
+        method: 'PATCH',
+        body: editForm,
+      });
+      setEditOpen(false);
+      await load();
+    } catch (ex) {
+      setErr(ex instanceof ApiError ? ex.message : 'Update failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteTicket() {
+    if (!confirm(`Are you sure you want to delete this ticket?`)) return;
+    setBusy(true); setErr('');
+    try {
+      await api(`/tickets/${params.id}`, { method: 'DELETE' });
+      router.push('/tickets');
+    } catch (ex) {
+      setErr(ex instanceof ApiError ? ex.message : 'Delete failed');
+      setBusy(false);
+    }
+  }
+
   if (loading || !user) return <Loading />;
   if (!t) return <><p className="err">{err}</p><Loading /></>;
 
   const canManage = user.role === 'ADMIN' || t.assignee?.id === user.id ||
     ((user.role === 'TEAM_LEAD' || user.role === 'COORDINATOR') && !!t.team && t.team.id === user.teamId);
   const isRequester = t.requester.id === user.id;
+  const canModify = isRequester || user.role === 'ADMIN' || user.role === 'TEAM_LEAD';
   const closed = t.status === 'CLOSED' || t.status === 'RESOLVED';
 
   return (
     <div className="space-y-5">
-      <Link href="/tickets" className="text-sm font-medium text-slate-500 hover:text-brand-600">← Back to tickets</Link>
+      <div className="flex items-center justify-between">
+        <Link href="/tickets" className="text-sm font-medium text-slate-500 hover:text-brand-600">← Back to tickets</Link>
+        {canModify && (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setEditOpen(true)}
+              className="btn-secondary !py-1 !text-xs"
+            >
+              ✏️ Edit
+            </button>
+            <button
+              type="button"
+              onClick={deleteTicket}
+              className="rounded-xl border border-red-200 bg-white px-3 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 hover:text-red-700 transition"
+            >
+              🗑️ Delete
+            </button>
+          </div>
+        )}
+      </div>
+
       <div className="flex flex-wrap items-start gap-3">
         <div className="min-w-0 flex-1">
           <h1 className="page-title">{t.subject}</h1>
@@ -145,6 +208,36 @@ export default function TicketDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Edit Ticket Modal */}
+      <Modal open={editOpen} onClose={() => setEditOpen(false)} title={`Edit ticket: ${t.subject}`}>
+        <form onSubmit={updateTicket} className="space-y-3">
+          <div><label className="label">Subject</label><input className="input" required minLength={3} maxLength={200} value={editForm.subject} onChange={(e) => setEditForm({ ...editForm, subject: e.target.value })} /></div>
+          <div><label className="label">Details</label><textarea className="input" rows={4} maxLength={10000} value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} /></div>
+          <div className="grid grid-cols-3 gap-3">
+            <div><label className="label">Category</label>
+              <select className="input" value={editForm.category} onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}>
+                {['WORK', 'ACCESS', 'ATTENDANCE', 'TECHNICAL', 'OTHER'].map((c) => <option key={c} value={c}>{c.toLowerCase()}</option>)}
+              </select></div>
+            <div><label className="label">Priority</label>
+              <select className="input" value={editForm.priority} onChange={(e) => setEditForm({ ...editForm, priority: e.target.value })}>
+                {['LOW', 'MEDIUM', 'HIGH', 'URGENT'].map((p) => <option key={p}>{p}</option>)}
+              </select></div>
+            <div><label className="label">Status</label>
+              <select className="input" value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}>
+                <option value="OPEN">Open</option>
+                <option value="IN_PROGRESS">In progress</option>
+                <option value="RESOLVED">Resolved</option>
+                <option value="CLOSED">Closed</option>
+              </select></div>
+          </div>
+          {err && <p className="err">{err}</p>}
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" className="btn-secondary" onClick={() => setEditOpen(false)}>Cancel</button>
+            <button className="btn" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

@@ -3,7 +3,7 @@ import type { Request } from 'express';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser, RequestUser } from '../../common/decorators/current-user.decorator';
 import { WorkplaceService } from './workplace.service';
-import { CreateMeetingDto, DecideLeaveDto, RequestLeaveDto, UpdateMeetingNoteDto, CreateCalendarEventDto, UpdateCalendarEventDto } from './dto/workplace.dto';
+import { CreateMeetingDto, UpdateMeetingDto, DecideLeaveDto, RequestLeaveDto, UpdateMeetingNoteDto, CreateCalendarEventDto, UpdateCalendarEventDto } from './dto/workplace.dto';
 
 @Controller()
 export class WorkplaceController {
@@ -18,6 +18,12 @@ export class WorkplaceController {
   @Post('meetings')
   createMeeting(@CurrentUser() me: RequestUser, @Body() dto: CreateMeetingDto, @Req() req: Request) {
     return this.work.createMeeting(me, dto, this.ip(req));
+  }
+
+  @Roles('ADMIN', 'TEAM_LEAD')
+  @Patch('meetings/:id')
+  updateMeeting(@CurrentUser() me: RequestUser, @Param('id') id: string, @Body() dto: UpdateMeetingDto, @Req() req: Request) {
+    return this.work.updateMeeting(me, id, dto, this.ip(req));
   }
 
   @Get('meetings')

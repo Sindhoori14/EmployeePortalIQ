@@ -30,8 +30,9 @@ export class ReportsController {
     @Query('date') date?: string,
     @Query('teamId') teamId?: string,
     @Query('batchId') batchId?: string,
+    @Query('role') role?: string,
   ) {
-    return this.reports.status(me, date, teamId, batchId);
+    return this.reports.status(me, date, teamId, batchId, role);
   }
 
   @Roles('ADMIN', 'TEAM_LEAD', 'COORDINATOR')
@@ -39,11 +40,14 @@ export class ReportsController {
   list(
     @CurrentUser() me: RequestUser,
     @Query('date') date?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
     @Query('teamId') teamId?: string,
     @Query('employeeId') employeeId?: string,
+    @Query('role') role?: string,
     @Query('batchId') batchId?: string,
   ) {
-    return this.reports.list(me, { date, teamId, employeeId, batchId });
+    return this.reports.list(me, { date, from, to, teamId, employeeId, role, batchId });
   }
 
   @Roles('ADMIN', 'TEAM_LEAD', 'COORDINATOR', 'EMPLOYEE')

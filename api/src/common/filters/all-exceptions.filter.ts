@@ -29,6 +29,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
     else if (code === 'P2003') { status = 400; message = 'Related record does not exist or is still in use.'; }
     else if (code === 'P2004' || code === 'P2010' || /check constraint/i.test(String(err?.message))) { status = 400; message = 'Value rejected by a database rule.'; }
     else if (name === 'PrismaClientValidationError') { status = 400; message = 'Invalid input.'; }
+    else if (code === 'P1001' || /Can't reach database server|connection closed|Connection lost/i.test(String(err?.message))) {
+      status = HttpStatus.SERVICE_UNAVAILABLE;
+      message = 'The database is reconnecting or waking up. Please retry in a few moments.';
+    }
 
     if (status === 500) {
       const ref = Math.random().toString(36).slice(2, 8);

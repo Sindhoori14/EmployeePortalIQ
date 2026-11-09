@@ -105,27 +105,46 @@ export class ReportsService {
     });
   }
 
-  async list(me: RequestUser, q: { date?: string; teamId?: string; employeeId?: string; batchId?: string }) {
+  async list(me: RequestUser, q: { date?: string; from?: string; to?: string; teamId?: string; employeeId?: string; role?: string; batchId?: string }) {
     if (me.role === 'EMPLOYEE') throw new ForbiddenException('Use /daily-reports/mine');
     const where: any = {};
     const d = needDay(q.date);
-    if (d) where.reportDate = dayToDate(d);
+    const f = needDay(q.from);
+    const t = needDay(q.to);
+
+    if (f || t) {
+      where.reportDate = {
+        ...(f ? { gte: dayToDate(f) } : {}),
+        ...(t ? { lte: dayToDate(t) } : {}),
+      };
+    } else if (d) {
+      where.reportDate = dayToDate(d);
+    }
 
     if (me.role === 'TEAM_LEAD' || me.role === 'COORDINATOR') {
       if (!me.teamId) return [];
-      where.teamId = me.teamId;
-      if (q.employeeId) where.userId = q.employeeId;
+      if (q.employeeId && q.employeeId !== 'ALL') {
+        where.userId = q.employeeId;
+      } else {
+        where.OR = [
+          { teamId: me.teamId },
+          { userId: me.id },
+        ];
+      }
     } else if (me.role === 'ADMIN') {
       if (q.teamId && q.teamId !== 'ALL') where.teamId = q.teamId;
       if (q.employeeId && q.employeeId !== 'ALL') where.userId = q.employeeId;
+      if (q.role === 'TEAM_LEAD') {
+        where.user = { role: 'TEAM_LEAD' };
+      }
     }
 
     if (q.batchId) where.batchId = q.batchId;
 
     return this.prisma.dailyReport.findMany({
       where,
-      orderBy: { submittedAt: 'desc' },
-      take: 200,
+      orderBy: [{ reportDate: 'desc' }, { submittedAt: 'desc' }],
+      take: 500,
       include: {
         files: LIVE_FILES,
         user: { select: { id: true, displayName: true, email: true, role: true, team: { select: { id: true, name: true } } } },
@@ -156,18 +175,28 @@ export class ReportsService {
   }
 
   // Who submitted / who is missing — role-based visibility.
-  async status(me: RequestUser, dateStr?: string, teamId?: string, batchId?: string) {
+  async status(me: RequestUser, dateStr?: string, teamId?: string, batchId?: string, role?: string) {
     if (!['ADMIN', 'TEAM_LEAD', 'COORDINATOR'].includes(me.role)) throw new ForbiddenException('Forbidden');
     const day = needDay(dateStr) ?? dayStr();
     const date = dayToDate(day);
     const working = await this.calendar.isWorkingDay(day);
 
-    const scope: any = { isActive: true, role: { not: 'ADMIN' }, createdAt: { lt: dayRange(day).end } };
+    const scope: any = { isActive: true, createdAt: { lt: dayRange(day).end } };
     if (me.role === 'TEAM_LEAD' || me.role === 'COORDINATOR') {
       if (!me.teamId) return { date: day, workingDay: working, total: 0, submittedCount: 0, missingCount: 0, submitted: [], missing: [] };
-      scope.teamId = me.teamId;
-    } else if (teamId && teamId !== 'ALL') {
-      scope.teamId = teamId;
+      scope.OR = [
+        { teamId: me.teamId },
+        { id: me.id },
+      ];
+    } else if (me.role === 'ADMIN') {
+      if (role === 'TEAM_LEAD') {
+        scope.role = 'TEAM_LEAD';
+      } else {
+        scope.role = { not: 'ADMIN' };
+      }
+      if (teamId && teamId !== 'ALL') {
+        scope.teamId = teamId;
+      }
     }
     if (batchId) scope.batchId = batchId;
 

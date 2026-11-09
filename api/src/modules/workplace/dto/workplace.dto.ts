@@ -25,6 +25,58 @@ export class CreateMeetingDto {
   @IsOptional()
   @IsIn(['NONE', 'DAILY'])
   recurrence?: 'NONE' | 'DAILY';
+
+  @IsOptional()
+  @IsString()
+  targetScope?: string; // 'ALL' | 'TEAM' | 'TEAM_LEADS' | 'INDIVIDUAL' | 'CUSTOM'
+
+  @IsOptional()
+  @IsString()
+  targetUserId?: string;
+
+  @IsOptional()
+  targetUserIds?: string[];
+}
+
+export class UpdateMeetingDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  title?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(8)
+  @MaxLength(2000)
+  meetUrl?: string;
+
+  @IsOptional()
+  @IsDateString()
+  startsAt?: string;
+
+  @IsOptional()
+  @IsDateString()
+  endsAt?: string;
+
+  @IsOptional()
+  @IsIn(['NONE', 'DAILY'])
+  recurrence?: 'NONE' | 'DAILY';
+
+  @IsOptional()
+  @IsString()
+  teamId?: string | null;
+
+  @IsOptional()
+  @IsString()
+  targetScope?: string;
+
+  @IsOptional()
+  @IsString()
+  targetUserId?: string;
+
+  @IsOptional()
+  targetUserIds?: string[];
 }
 
 export class RequestLeaveDto {

@@ -209,14 +209,14 @@ export default function UsersPage() {
       <div className="card table-wrap !p-2">
         {fetching && rows.length === 0 ? <Loading /> : rows.length === 0 ? <Empty text="No one matches these filters." /> : (
           <table>
-            <thead><tr><th>Person</th><th>Role</th><th>Team</th><th>Batch</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Person</th><th>Role</th><th>Team</th><th>Status</th><th></th></tr></thead>
             <tbody>
               {rows.map((u) => (
                 <tr key={u.id} className="hover:bg-slate-50">
                   <td><div className="flex items-center gap-3"><Avatar userId={u.id} name={u.displayName} size={34} /><div><p className="font-medium text-ink-900">{u.displayName}</p><p className="text-xs text-slate-400">{u.email}</p></div></div></td>
                   <td><span className="rounded-md bg-accent-50 px-2 py-0.5 text-xs font-semibold text-accent-700">{ROLE_LABEL[u.role] ?? u.role}</span></td>
                   <td className="text-slate-600">{u.team?.name ?? <span className="text-amber-600">Unassigned</span>}</td>
-                  <td className="text-slate-600">{u.batch?.name ?? '—'}</td>
+                  
                   <td><span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${u.isActive ? 'bg-green-50 text-green-700' : 'bg-slate-100 text-slate-500'}`}>{u.isActive ? 'Active' : 'Inactive'}</span></td>
                   <td className="whitespace-nowrap text-right">
                     <HrSupportButton teamId={u.teamId} teamName={u.team?.name} />
@@ -252,8 +252,7 @@ export default function UsersPage() {
                 <select className="input" value={form.teamId} disabled={!isAdmin} onChange={(e) => setForm({ ...form, teamId: e.target.value })}>
                   <option value="">{isAdmin ? 'No team yet' : 'Your team'}</option>{teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></div>
             </div>
-            <div><label className="label">Batch (interns / trainees)</label>
-              <select className="input" value={form.batchId} onChange={(e) => setForm({ ...form, batchId: e.target.value })}><option value="">No batch</option>{batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+            
             <div><label className="label">Password <span className="font-normal normal-case text-slate-400">(leave blank to generate one)</span></label>
               <input className="input" type="text" minLength={8} autoComplete="off" placeholder="Auto-generated and shown once" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></div>
             <button className="btn w-full" disabled={busy}>{busy ? 'Creating…' : 'Create account'}</button>
@@ -277,8 +276,7 @@ export default function UsersPage() {
                   <option value="">No team</option>
                   {teams.filter((t) => isAdmin || t.id === user.teamId).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></div>
             </div>
-            <div><label className="label">Batch</label>
-              <select className="input" value={edit.batchId ?? ''} onChange={(e) => setEdit({ ...edit, batchId: e.target.value || null })}><option value="">No batch</option>{batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+            
             <p className="text-xs text-amber-600">Changing role or team signs this person out so the new access applies at once.</p>
             <div className="flex gap-2">
               <button className="btn flex-1" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button>

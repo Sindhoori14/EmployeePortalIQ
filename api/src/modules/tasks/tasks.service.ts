@@ -69,7 +69,7 @@ export class TasksService {
 
   async list(
     me: RequestUser,
-    q: { status?: string; ownerId?: string; teamId?: string; projectId?: string; page?: string; limit?: string; search?: string; overdue?: string },
+    q: { status?: string; ownerId?: string; teamId?: string; projectId?: string; role?: string; leadOnly?: string; page?: string; limit?: string; search?: string; overdue?: string },
   ) {
     const page = Math.max(1, Number(q.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(q.limit) || 20));
@@ -78,6 +78,7 @@ export class TasksService {
     if (q.ownerId) where.ownerId = q.ownerId;
     if (q.teamId) where.teamId = q.teamId;
     if (q.projectId) where.projectId = q.projectId;
+    if (q.leadOnly === 'true' || q.role === 'TEAM_LEAD') where.owner = { role: 'TEAM_LEAD' };
     if (q.search?.trim()) where.title = { contains: q.search.trim(), mode: 'insensitive' };
     if (q.overdue === 'true') {
       where.dueDate = { lt: new Date() };
@@ -122,7 +123,7 @@ export class TasksService {
 
   async create(me: RequestUser, dto: CreateTaskDto, ip?: string) {
     if (!['ADMIN', 'TEAM_LEAD', 'COORDINATOR'].includes(me.role)) throw new ForbiddenException('Only leads, coordinators and admins assign tasks');
-    if (!plansOwnTeam(me, dto.teamId)) throw new ForbiddenException('You can assign tasks only within your own team');
+    if (me.role !== 'ADMIN' && me.role !== 'TEAM_LEAD' && !plansOwnTeam(me, dto.teamId)) throw new ForbiddenException('You can assign tasks only within your own team');
 
     const [owner, team] = await Promise.all([
       this.prisma.user.findUnique({ where: { id: dto.ownerId }, select: { id: true, isActive: true, teamId: true } }),

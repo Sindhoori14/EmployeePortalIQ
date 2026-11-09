@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser, RequestUser } from '../../common/decorators/current-user.decorator';
@@ -29,5 +29,11 @@ export class TeamsController {
   @Patch(':id')
   update(@CurrentUser() me: RequestUser, @Param('id') id: string, @Body() dto: UpdateTeamDto, @Req() req: Request) {
     return this.teams.update(me, id, dto, req.ip);
+  }
+
+  @Roles('ADMIN', 'TEAM_LEAD')
+  @Delete(':id')
+  delete(@CurrentUser() me: RequestUser, @Param('id') id: string, @Req() req: Request) {
+    return this.teams.delete(me, id, req.ip);
   }
 }

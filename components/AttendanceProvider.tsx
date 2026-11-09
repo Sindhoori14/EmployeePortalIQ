@@ -4,6 +4,7 @@ function playBreakEndChime() {
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioCtx) return;
     const ctx = new AudioCtx();
+    if (ctx.state === 'suspended') { ctx.resume().catch(() => {}); }
     const now = ctx.currentTime;
 
     const osc1 = ctx.createOscillator();
@@ -111,14 +112,10 @@ export function AttendanceProvider({ children }: { children: React.ReactNode }) 
     checkOut: (note) => run(() => api('/attendance/check-out', { method: 'POST', body: { note: note || undefined } })),
     startBreak: (reason, note) => run(() => api('/attendance/break/start', { method: 'POST', body: { reason, note: note || undefined } })),
     endBreak: () => {
-      const openBreakReason = today?.record?.openBreak?.reason?.toUpperCase() || '';
-      const isNotLunch = openBreakReason !== 'LUNCH' && !openBreakReason.includes('LUNCH');
-      const isEmpOrTl = !user || user.role === 'EMPLOYEE' || user.role === 'TEAM_LEAD';
+      // Trigger audible chime synchronously on user click
+      playBreakEndChime();
       return run(async () => {
         await api('/attendance/break/end', { method: 'POST' });
-        if (isEmpOrTl && isNotLunch) {
-          playBreakEndChime();
-        }
       });
     },
   }), [today, err, errCode, busy, reload, run]);

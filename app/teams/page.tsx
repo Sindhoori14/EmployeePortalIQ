@@ -145,6 +145,30 @@ export default function TeamsPage() {
     }
   }
 
+  const canManage = (t: Team | TeamDetail | null) => {
+    if (!t || !user) return false;
+    return Boolean(t.canEdit || isAdmin || (isTeamLead && (t.leadId === user.id || t.createdById === user.id || user.teamId === t.id)));
+  };
+
+  async function handleDelete() {
+    if (!open) return;
+    const confirmDelete = window.confirm(
+      `Are you sure you want to delete "${open.name}"? All assigned members will be unassigned and team data will be removed.`
+    );
+    if (!confirmDelete) return;
+    setBusy(true);
+    setErr('');
+    try {
+      await api(`/teams/${open.id}`, { method: 'DELETE' });
+      setOpen(null);
+      await load();
+    } catch (ex) {
+      setErr(ex instanceof ApiError ? ex.message : 'Delete failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     if (!open) return;
@@ -212,7 +236,7 @@ export default function TeamsPage() {
                     <p className="text-sm text-slate-500">{t._count?.members ?? 0} members</p>
                   </div>
                 </div>
-                {t.canEdit ? (
+                {canManage(t) ? (
                   <span className="rounded bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-700">
                     Manage
                   </span>
@@ -393,13 +417,13 @@ export default function TeamsPage() {
             {err && <p className="err" role="alert">{err}</p>}
 
             {/* CR9: View-only notice for non-creator Admins / others */}
-            {!open.canEdit && (
+            {!canManage(open) && (
               <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-medium text-amber-800">
                 🔒 View-only access: Only the creator of this team can edit details or manage members.
               </div>
             )}
 
-            {open.canEdit ? (
+            {canManage(open) ? (
               <>
                 <div>
                   <label className="label">Team name <span className="text-red-500">*</span></label>
@@ -574,10 +598,20 @@ export default function TeamsPage() {
               </div>
             )}
 
-            {open.canEdit && (
-              <button className="btn w-full" disabled={busy}>
-                {busy ? 'Saving team…' : 'Save team'}
-              </button>
+            {canManage(open) && (
+              <div className="flex items-center gap-3 pt-2">
+                <button type="submit" className="btn flex-1" disabled={busy}>
+                  {busy ? 'Saving team...' : 'Save team'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDelete}
+                  className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 transition"
+                  disabled={busy}
+                >
+                  Delete team
+                </button>
+              </div>
             )}
           </form>
         )}

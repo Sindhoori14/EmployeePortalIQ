@@ -6,7 +6,7 @@ import { useRequireAuth } from '../../lib/auth-context';
 import { Avatar, Empty, Loading, Modal, PageHeader } from '../../components/ui';
 
 interface Ticket {
-  id: string; subject: string; category: string; priority: string; status: string; escalated: boolean;
+  id: string; subject: string; description?: string; category: string; priority: string; status: string; escalated: boolean;
   createdAt: string;
   requester: { id: string; displayName: string; role: string };
   assignee: { id: string; displayName: string } | null;
@@ -30,8 +30,14 @@ export default function TicketsPage() {
   const [status, setStatus] = useState('');
   const [err, setErr] = useState('');
   const [open, setOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editingTicket, setEditingTicket] = useState<Ticket | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // New ticket form
   const [form, setForm] = useState({ subject: '', description: '', category: 'WORK', priority: 'MEDIUM', escalateToAdmin: false });
+  // Edit ticket form
+  const [editForm, setEditForm] = useState({ subject: '', description: '', category: 'WORK', priority: 'MEDIUM', status: 'OPEN' });
 
   async function load() {
     setFetching(true);
@@ -52,6 +58,54 @@ export default function TicketsPage() {
     finally { setBusy(false); }
   }
 
+  function startEdit(t: Ticket) {
+    setEditingTicket(t);
+    setEditForm({
+      subject: t.subject,
+      description: t.description || '',
+      category: t.category,
+      priority: t.priority,
+      status: t.status,
+    });
+    setEditOpen(true);
+  }
+
+  async function updateTicket(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingTicket) return;
+    setErr(''); setBusy(true);
+    try {
+      await api(`/tickets/${editingTicket.id}`, {
+        method: 'PATCH',
+        body: {
+          subject: editForm.subject,
+          description: editForm.description || undefined,
+          category: editForm.category,
+          priority: editForm.priority,
+          status: editForm.status,
+        },
+      });
+      setEditOpen(false);
+      setEditingTicket(null);
+      await load();
+    } catch (ex) {
+      setErr(ex instanceof ApiError ? ex.message : 'Update failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteTicket(t: Ticket) {
+    if (!confirm(`Are you sure you want to delete ticket "${t.subject}"?`)) return;
+    setErr('');
+    try {
+      await api(`/tickets/${t.id}`, { method: 'DELETE' });
+      await load();
+    } catch (ex) {
+      setErr(ex instanceof ApiError ? ex.message : 'Delete failed');
+    }
+  }
+
   if (loading || !user) return <Loading />;
   const openCount = rows.filter((t) => t.status === 'OPEN' || t.status === 'IN_PROGRESS').length;
 
@@ -67,31 +121,69 @@ export default function TicketsPage() {
         </select>
         <button className="btn" onClick={() => setOpen(true)}>+ New ticket</button>
       </PageHeader>
-      {err && !open && <p className="err">{err}</p>}
+      {err && !open && !editOpen && <p className="err">{err}</p>}
       {!fetching && <p className="text-xs text-slate-500">{openCount} open · {rows.length} shown</p>}
       {fetching ? <Loading /> : rows.length === 0 ? <div className="card"><Empty text="No tickets here." /></div> : (
         <div className="card table-wrap !p-2">
           <table>
-            <thead><tr><th>Ticket</th><th>Status</th><th>Priority</th><th>Raised by</th><th>Owner</th><th>Age</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Ticket</th>
+                <th>Status</th>
+                <th>Priority</th>
+                <th>Raised by</th>
+                <th>Owner</th>
+                <th>Age</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
             <tbody>
-              {rows.map((t) => (
-                <tr key={t.id} className="hover:bg-slate-50">
-                  <td>
-                    <Link href={`/tickets/${t.id}`} className="font-medium text-ink-900 hover:text-brand-600">{t.subject}</Link>
-                    <p className="text-[11px] text-slate-400">{t.category.toLowerCase()}{t.escalated ? ' · escalated' : ''}{t.team ? ` · ${t.team.name}` : ''}</p>
-                  </td>
-                  <td><span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${STATUS_TONE[t.status] ?? ''}`}>{t.status.replace('_', ' ')}</span></td>
-                  <td><span className={`text-xs font-semibold ${PRIORITY_TONE[t.priority] ?? ''}`}>{t.priority}</span></td>
-                  <td><span className="flex items-center gap-1.5 text-sm"><Avatar userId={t.requester.id} name={t.requester.displayName} size={22} />{t.requester.displayName}</span></td>
-                  <td className="text-sm text-slate-600">{t.assignee?.displayName ?? 'Unassigned'}</td>
-                  <td className="text-xs text-slate-400">{timeAgo(t.createdAt)}</td>
-                </tr>
-              ))}
+              {rows.map((t) => {
+                const canModify = t.requester.id === user.id || user.role === 'ADMIN' || user.role === 'TEAM_LEAD';
+                return (
+                  <tr key={t.id} className="hover:bg-slate-50">
+                    <td>
+                      <Link href={`/tickets/${t.id}`} className="font-medium text-ink-900 hover:text-brand-600">{t.subject}</Link>
+                      <p className="text-[11px] text-slate-400">{t.category.toLowerCase()}{t.escalated ? ' · escalated' : ''}{t.team ? ` · ${t.team.name}` : ''}</p>
+                    </td>
+                    <td><span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${STATUS_TONE[t.status] ?? ''}`}>{t.status.replace('_', ' ')}</span></td>
+                    <td><span className={`text-xs font-semibold ${PRIORITY_TONE[t.priority] ?? ''}`}>{t.priority}</span></td>
+                    <td><span className="flex items-center gap-1.5 text-sm"><Avatar userId={t.requester.id} name={t.requester.displayName} size={22} />{t.requester.displayName}</span></td>
+                    <td className="text-sm text-slate-600">{t.assignee?.displayName ?? 'Unassigned'}</td>
+                    <td className="text-xs text-slate-400">{timeAgo(t.createdAt)}</td>
+                    <td>
+                      {canModify ? (
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => startEdit(t)}
+                            className="rounded-lg px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 hover:text-ink-900 transition"
+                            title="Edit ticket"
+                          >
+                            ✏️ Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteTicket(t)}
+                            className="rounded-lg px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 hover:text-red-700 transition"
+                            title="Delete ticket"
+                          >
+                            🗑️ Delete
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-400">—</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
 
+      {/* New Ticket Modal */}
       <Modal open={open} onClose={() => setOpen(false)} title="Raise a ticket">
         <form onSubmit={create} className="space-y-3">
           <div><label className="label">Subject</label><input className="input" required minLength={3} maxLength={200} value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} placeholder="e.g. Laptop cannot connect to VPN" /></div>
@@ -103,7 +195,7 @@ export default function TicketsPage() {
               </select></div>
             <div><label className="label">Priority</label>
               <select className="input" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>
-                {['LOW', 'MEDIUM', 'HIGH', 'URGENT'].map((p) => <option key={p} value={p}>{p}</option>)}
+                {['LOW', 'MEDIUM', 'HIGH', 'URGENT'].map((p) => <option key={p}>{p}</option>)}
               </select></div>
           </div>
           {user.role !== 'ADMIN' && (
@@ -114,6 +206,36 @@ export default function TicketsPage() {
           )}
           {err && <p className="err">{err}</p>}
           <button className="btn w-full" disabled={busy}>{busy ? 'Sending…' : 'Raise ticket'}</button>
+        </form>
+      </Modal>
+
+      {/* Edit Ticket Modal */}
+      <Modal open={editOpen} onClose={() => setEditOpen(false)} title={`Edit ticket: ${editingTicket?.subject ?? ''}`}>
+        <form onSubmit={updateTicket} className="space-y-3">
+          <div><label className="label">Subject</label><input className="input" required minLength={3} maxLength={200} value={editForm.subject} onChange={(e) => setEditForm({ ...editForm, subject: e.target.value })} /></div>
+          <div><label className="label">Details</label><textarea className="input" rows={4} maxLength={10000} value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} /></div>
+          <div className="grid grid-cols-3 gap-3">
+            <div><label className="label">Category</label>
+              <select className="input" value={editForm.category} onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}>
+                {['WORK', 'ACCESS', 'ATTENDANCE', 'TECHNICAL', 'OTHER'].map((c) => <option key={c} value={c}>{c.toLowerCase()}</option>)}
+              </select></div>
+            <div><label className="label">Priority</label>
+              <select className="input" value={editForm.priority} onChange={(e) => setEditForm({ ...editForm, priority: e.target.value })}>
+                {['LOW', 'MEDIUM', 'HIGH', 'URGENT'].map((p) => <option key={p}>{p}</option>)}
+              </select></div>
+            <div><label className="label">Status</label>
+              <select className="input" value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}>
+                <option value="OPEN">Open</option>
+                <option value="IN_PROGRESS">In progress</option>
+                <option value="RESOLVED">Resolved</option>
+                <option value="CLOSED">Closed</option>
+              </select></div>
+          </div>
+          {err && <p className="err">{err}</p>}
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" className="btn-secondary" onClick={() => setEditOpen(false)}>Cancel</button>
+            <button className="btn" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button>
+          </div>
         </form>
       </Modal>
     </div>
