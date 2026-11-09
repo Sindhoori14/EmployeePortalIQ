@@ -167,19 +167,54 @@ export class AuthService {
     }
   }
 
-  async changePassword(userId: string, current: string, next: string, ip?: string) {
-    if (!passwordOk(next)) throw new BadRequestException('Password must be 8+ chars with letter and number');
+  async changePassword(
+    userId: string,
+    current: string,
+    next: string,
+    ip?: string,
+    confirm?: string,
+    ua?: string,
+    rotateSession = false,
+  ) {
+    if (confirm !== undefined && confirm !== next) {
+      throw new BadRequestException('New password and confirmation do not match');
+    }
+    if (!passwordOk(next)) {
+      throw new BadRequestException('Password must be 8+ chars with letter and number');
+    }
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) throw new UnauthorizedException('Account not found');
+    if (!user || !user.isActive) throw new UnauthorizedException('Account not found');
     const ok = await argon2.verify(user.passwordHash, current).catch(() => false);
     if (!ok) throw new UnauthorizedException('Current password is incorrect');
-    await this.prisma.user.update({
+    const sameAsCurrent =
+      current === next || (await argon2.verify(user.passwordHash, next).catch(() => false));
+    if (sameAsCurrent) {
+      throw new BadRequestException('New password must be different from your current password');
+    }
+    const updated = await this.prisma.user.update({
       where: { id: userId },
       data: { passwordHash: await argon2.hash(next), mustChangePassword: false },
     });
     await this.prisma.refreshToken.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } });
     this.cache.invalidate(userId);
     await this.audit.log({ actorId: userId, action: 'PASSWORD_CHANGE', entity: 'user', entityId: userId, ip });
+
+    if (rotateSession) {
+      const access = await this.accessToken(updated.id, updated.role);
+      const rawRefresh = crypto.randomBytes(48).toString('hex');
+      const expiresAt = new Date(Date.now() + REFRESH_DAYS * 24 * 3600 * 1000);
+      await this.prisma.refreshToken.create({
+        data: {
+          userId: updated.id,
+          tokenHash: sha256(rawRefresh),
+          expiresAt,
+          ip: ip?.slice(0, 45) ?? null,
+          userAgent: ua?.slice(0, 500) ?? null,
+        },
+      });
+      return { ok: true, user: updated, access, rawRefresh, refreshExp: expiresAt };
+    }
+    return { ok: true, user: updated };
   }
 
   /**

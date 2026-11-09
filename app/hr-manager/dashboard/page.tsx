@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { api, CANDIDATE_STATUS_COLORS, CANDIDATE_STATUS_LABEL, REQ_STATUS_COLORS, REQ_STATUS_LABEL } from '../../../lib/api';
 import { useRequireAuth } from '../../../lib/auth-context';
 import { Loading, PageHeader, Stat } from '../../../components/ui';
+import { AttendanceGlance } from '../../../components/AttendanceGlance';
+import { useMyAttendance } from '../../../components/AttendanceProvider';
 
 interface ManagerOverview {
   totalEmployees: number;
@@ -35,6 +37,7 @@ interface ManagerOverview {
 
 export default function HrManagerDashboardPage() {
   const { user, loading } = useRequireAuth(['HR_MANAGER', 'ADMIN']);
+  const att = useMyAttendance();
   const [data, setData] = useState<ManagerOverview | null>(null);
   const [err, setErr] = useState('');
   const [refreshing, setRefreshing] = useState(false);
@@ -82,6 +85,12 @@ export default function HrManagerDashboardPage() {
 
       {err && <p className="err">{err}</p>}
 
+      {att.today && att.today.workingDay && !att.today.record && (
+        <Link href="/attendance" className="flex items-center gap-3 rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-800 transition hover:bg-orange-100">
+          <span className="text-xl">🕘</span><span><b>You have not checked in yet.</b> Tap to mark your attendance.</span><span className="ml-auto font-semibold">Check in →</span>
+        </Link>
+      )}
+
       {/* KPI Cards */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
         <Stat label="Total Employees" value={data?.totalEmployees ?? 0} tone="brand" hint="Active in organization" />
@@ -95,6 +104,8 @@ export default function HrManagerDashboardPage() {
         <Stat label="Rejected Candidates" value={status.REJECTED ?? 0} tone="danger" hint="Not suitable" />
         <Stat label="On Hold" value={status.ON_HOLD ?? 0} tone="default" hint="Pending decision" />
       </div>
+
+      <AttendanceGlance />
 
       {/* Recruitment Pipeline Funnel */}
       <div className="card !p-5">

@@ -10,9 +10,22 @@ import { NotificationsService } from '../comms/notifications.service';
 import { RealtimeGateway } from '../comms/realtime.gateway';
 import { ReportGateService } from '../../common/report-gate.service';
 import { CheckInDto, CheckOutDto, MarkAttendanceDto, StartBreakDto } from './attendance.dto';
-import { DayState, fmtMinutes, GRID_CODE, lateMinutes, StoredStatus, stateFor, statusFor, workedAndBreak } from './attendance.logic';
+import {
+  ATTENDANCE_ROLE_LABEL,
+  BREAK_LABEL,
+  DayState,
+  fmtMinutes,
+  formatBreakIntervals,
+  GRID_CODE,
+  lateMinutes,
+  parseAttendanceRole,
+  sheetToCsv,
+  StoredStatus,
+  stateFor,
+  statusFor,
+  workedAndBreak,
+} from './attendance.logic';
 
-const BREAK_LABEL: Record<string, string> = { LUNCH: 'Lunch', TEA: 'Tea / coffee', PERSONAL: 'Personal', OTHER: 'Other' };
 const STATE_LABEL: Record<DayState, string> = {
   WORKING: 'Working', ON_BREAK: 'On break', CHECKED_OUT: 'Checked out', LEAVE: 'On leave', NOT_IN: 'Not checked in', ABSENT: 'Absent', OFF: 'Day off',
 };
@@ -177,17 +190,30 @@ export class AttendanceService {
   // =====================================================================
   //  Scoping & row computation
   // =====================================================================
-  private scopeWhere(me: RequestUser, f: { teamId?: string; batchId?: string; userId?: string }) {
+  private parseRole(role?: string) {
+    const parsed = parseAttendanceRole(role);
+    if (parsed.invalid) throw new BadRequestException('Invalid role filter');
+    return parsed.role;
+  }
+
+  private scopeWhere(me: RequestUser, f: { teamId?: string; batchId?: string; userId?: string; role?: string }) {
+    const role = this.parseRole(f.role);
     const where: any = {};
     if (me.role === 'ADMIN' || me.role === 'HR_MANAGER') {
       if (f.teamId) where.teamId = f.teamId === 'none' ? null : f.teamId;
+      if (f.batchId) where.batchId = f.batchId === 'none' ? null : f.batchId;
+      if (f.userId) where.id = f.userId;
     } else if (me.role === 'TEAM_LEAD' || me.role === 'COORDINATOR') {
+      if (f.teamId && f.teamId !== me.teamId) throw new ForbiddenException('You can only view your own team');
       where.teamId = me.teamId ?? '__none__'; // staff see their own team only; ?teamId= cannot widen it
+      if (f.batchId) where.batchId = f.batchId === 'none' ? null : f.batchId;
+      if (f.userId) where.id = f.userId;
     } else {
+      if (f.userId && f.userId !== me.id) throw new ForbiddenException('You can only see your own attendance');
+      if (f.teamId || f.batchId) throw new ForbiddenException('Forbidden');
       where.id = me.id; // employees & hr support: themselves only
     }
-    if (f.batchId) where.batchId = f.batchId;
-    if (f.userId) where.id = f.userId;
+    if (role) where.role = role;
     return where;
   }
 
@@ -263,7 +289,7 @@ export class AttendanceService {
     return c;
   }
 
-  private async scopedUsers(me: RequestUser, f: { teamId?: string; batchId?: string; userId?: string }, from: string): Promise<UserLite[]> {
+  private async scopedUsers(me: RequestUser, f: { teamId?: string; batchId?: string; userId?: string; role?: string }, from: string): Promise<UserLite[]> {
     const where = this.scopeWhere(me, f);
     return (await this.prisma.user.findMany({
       where: { ...where, OR: [{ isActive: true }, { deactivatedAt: { gte: dayRange(from).start } }] },
@@ -272,18 +298,19 @@ export class AttendanceService {
   }
 
   // =====================================================================
-  //  Live board (admin / lead / coordinator)
+  //  Live board (admin / hr manager / lead / coordinator)
   // =====================================================================
-  async board(me: RequestUser, q: { date?: string; teamId?: string; batchId?: string }) {
+  async board(me: RequestUser, q: { date?: string; teamId?: string; batchId?: string; role?: string }) {
     if (me.role === 'EMPLOYEE' || me.role === 'HR_SUPPORT') throw new ForbiddenException('Forbidden');
     const date = q.date ?? dayStr();
     if (!isValidDay(date)) throw new BadRequestException('date must be YYYY-MM-DD');
     if (date > dayStr()) throw new BadRequestException('Cannot view a future date');
-    const key = `${me.role}|${me.teamId}|${date}|${q.teamId ?? ''}|${q.batchId ?? ''}`;
+    const role = this.parseRole(q.role);
+    const key = `${me.role}|${me.teamId ?? ''}|${date}|${q.teamId ?? ''}|${q.batchId ?? ''}|${role ?? ''}`;
     const hit = this.memo.get(key);
     if (hit && hit.exp > Date.now()) return hit.v;
 
-    const users = await this.scopedUsers(me, q, date);
+    const users = await this.scopedUsers(me, { ...q, role }, date);
     const { rows, working } = await this.compute(users, date, date);
     const order: Record<DayState, number> = { ON_BREAK: 0, WORKING: 1, CHECKED_OUT: 2, LEAVE: 3, NOT_IN: 4, ABSENT: 5, OFF: 6 };
     rows.sort((a, b) => order[a.state] - order[b.state] || a.name.localeCompare(b.name));
@@ -422,74 +449,186 @@ export class AttendanceService {
   private dailySheet(rows: Row[], title: string): Sheet {
     return {
       name: 'Daily', title,
-      columns: [{ header: '#', width: 5 }, { header: 'Name', width: 26 }, { header: 'Email', width: 30 }, { header: 'Role', width: 14 }, { header: 'Team', width: 18 }, { header: 'Batch', width: 18 },
-        { header: 'Status', width: 16 }, { header: 'Check-in', width: 10 }, { header: 'Check-out', width: 10 }, { header: 'Late (min)', width: 10 }, { header: 'Worked (hrs)', width: 12 },
-        { header: 'Break (min)', width: 11 }, { header: 'Breaks', width: 8 }, { header: 'Mode', width: 10 }, { header: 'Auto-closed', width: 11 }, { header: 'Edited by admin', width: 14 }, { header: 'Note', width: 36 }],
+      columns: [
+        { header: '#', width: 5 },
+        { header: 'Date', width: 12 },
+        { header: 'Name', width: 26 },
+        { header: 'Email', width: 30 },
+        { header: 'Role', width: 14 },
+        { header: 'Team', width: 18 },
+        { header: 'Batch', width: 18 },
+        { header: 'Status', width: 16 },
+        { header: 'Check-in', width: 10 },
+        { header: 'Check-out', width: 10 },
+        { header: 'Late (min)', width: 10 },
+        { header: 'Worked', width: 12 },
+        { header: 'Worked (hrs)', width: 12 },
+        { header: 'Break (min)', width: 11 },
+        { header: 'Breaks', width: 8 },
+        { header: 'Break times', width: 38 },
+        { header: 'Mode', width: 10 },
+        { header: 'Auto-closed', width: 11 },
+        { header: 'Edited by admin', width: 14 },
+        { header: 'Note', width: 36 },
+      ],
       rows: rows.map((r, i) => [
-        { v: i + 1, style: 'int' }, r.name, r.email, r.role.replace('_', ' ').toLowerCase(), r.teamName ?? '', r.batchName ?? '', this.stateCell(r), this.t(r.checkInAt), this.t(r.checkOutAt),
-        { v: r.lateMinutes || 0, style: 'int' }, { v: this.hours(r.workedMinutes), style: 'hours' }, { v: r.breakMinutes, style: 'int' }, { v: r.breakCount, style: 'int' },
-        r.mode ? r.mode.toLowerCase() : '', r.autoClosed ? 'yes' : '', r.edited ? 'yes' : '', r.note ?? '',
+        { v: i + 1, style: 'int' },
+        { v: dayToDate(r.day) as any, style: 'date' },
+        r.name,
+        r.email,
+        ATTENDANCE_ROLE_LABEL[r.role] ?? r.role,
+        r.teamName ?? '',
+        r.batchName ?? '',
+        this.stateCell(r),
+        this.t(r.checkInAt),
+        this.t(r.checkOutAt),
+        { v: r.lateMinutes || 0, style: 'int' },
+        r.checkInAt ? fmtMinutes(r.workedMinutes) : '',
+        { v: this.hours(r.workedMinutes), style: 'hours' },
+        { v: r.breakMinutes, style: 'int' },
+        { v: r.breakCount, style: 'int' },
+        formatBreakIntervals(r.breaks),
+        r.mode ? r.mode.toLowerCase() : '',
+        r.autoClosed ? 'yes' : '',
+        r.edited ? 'yes' : '',
+        r.note ?? '',
       ]),
     };
   }
 
-  private breaksSheet(rows: Row[], withDate: boolean): Sheet {
+  private breaksSheet(rows: Row[]): Sheet {
     const out: Cell[][] = [];
     for (const r of rows) for (const b of r.breaks) {
-      out.push([...(withDate ? [{ v: dayToDate(r.day) as any, style: 'date' } as Cell] : []), r.name, r.teamName ?? '', BREAK_LABEL[b.reason] ?? b.reason, this.t(b.startAt), b.endAt ? this.t(b.endAt) : 'still on break', { v: b.minutes, style: 'int' }, b.note ?? '']);
+      out.push([
+        { v: dayToDate(r.day) as any, style: 'date' } as Cell,
+        r.name,
+        r.email,
+        ATTENDANCE_ROLE_LABEL[r.role] ?? r.role,
+        r.teamName ?? '',
+        r.batchName ?? '',
+        BREAK_LABEL[b.reason] ?? b.reason,
+        this.t(b.startAt),
+        b.endAt ? this.t(b.endAt) : 'still on break',
+        { v: b.minutes, style: 'int' },
+        b.note ?? '',
+      ]);
     }
     return {
       name: 'Breaks',
-      columns: [...(withDate ? [{ header: 'Date', width: 12 }] : []), { header: 'Name', width: 26 }, { header: 'Team', width: 18 }, { header: 'Reason', width: 14 }, { header: 'Start', width: 10 }, { header: 'End', width: 14 }, { header: 'Minutes', width: 10 }, { header: 'Note', width: 36 }],
+      columns: [
+        { header: 'Date', width: 12 },
+        { header: 'Name', width: 26 },
+        { header: 'Email', width: 30 },
+        { header: 'Role', width: 14 },
+        { header: 'Team', width: 18 },
+        { header: 'Batch', width: 18 },
+        { header: 'Reason', width: 14 },
+        { header: 'Start', width: 10 },
+        { header: 'End', width: 14 },
+        { header: 'Duration (min)', width: 13 },
+        { header: 'Note', width: 36 },
+      ],
       rows: out,
     };
   }
 
-  async export(me: RequestUser, q: { type?: string; date?: string; month?: string; from?: string; to?: string; userId?: string; teamId?: string; batchId?: string; format?: string }) {
+  private async filterSummary(q: { teamId?: string; batchId?: string }, role?: string): Promise<string> {
+    const parts: string[] = [];
+    if (role) parts.push(`Role: ${ATTENDANCE_ROLE_LABEL[role] ?? role}`);
+    if (q.teamId) {
+      if (q.teamId === 'none') parts.push('Team: No team');
+      else {
+        const t = await this.prisma.team.findUnique({ where: { id: q.teamId }, select: { name: true } }).catch(() => null);
+        parts.push(`Team: ${t?.name ?? q.teamId}`);
+      }
+    }
+    if (q.batchId) {
+      if (q.batchId === 'none') parts.push('Batch: No batch');
+      else {
+        const b = await this.prisma.batch.findUnique({ where: { id: q.batchId }, select: { name: true } }).catch(() => null);
+        parts.push(`Batch: ${b?.name ?? q.batchId}`);
+      }
+    }
+    return parts.join(' · ');
+  }
+
+  async export(me: RequestUser, q: { type?: string; date?: string; month?: string; from?: string; to?: string; userId?: string; teamId?: string; batchId?: string; role?: string; format?: string }) {
     const rawType = q.type ?? 'day';
     const type = rawType === 'daily' ? 'day' : rawType;
     const csv = q.format === 'csv';
+    const role = this.parseRole(q.role);
     let sheets: Sheet[];
     let filename: string;
 
     if (type === 'day') {
-      if (me.role === 'EMPLOYEE') throw new ForbiddenException('Forbidden');
+      if (me.role === 'EMPLOYEE' || me.role === 'HR_SUPPORT') throw new ForbiddenException('Forbidden');
       const date = q.date ?? dayStr();
       if (!isValidDay(date)) throw new BadRequestException('date must be YYYY-MM-DD');
       if (date > dayStr()) throw new BadRequestException('Cannot export a future date');
-      const users = await this.scopedUsers(me, q, date);
+      const users = await this.scopedUsers(me, { ...q, role }, date);
       const { rows } = await this.compute(users, date, date);
       rows.sort((a, b) => (a.teamName ?? '~').localeCompare(b.teamName ?? '~') || a.name.localeCompare(b.name));
       const s = this.summarize(rows);
       const wd = weekday(date);
       const byTeam = new Map<string, Row[]>();
       for (const r of rows) byTeam.set(r.teamName ?? 'No team', [...(byTeam.get(r.teamName ?? 'No team') ?? []), r]);
+      const filterDesc = await this.filterSummary(q, role);
       const sum: Cell[][] = [
+        ...(filterDesc ? [['Filters applied', filterDesc] as Cell[]] : []),
         ['People on roster', { v: s.total - s.off, style: 'int' }], ['Present (checked in)', { v: s.present, style: 'int' }], ['  on time', { v: s.onTime, style: 'int' }], ['  late', { v: s.late, style: 'int' }], ['  half day', { v: s.halfDay, style: 'int' }],
         ['On leave', { v: s.leave, style: 'int' }], ['Absent / not checked in', { v: s.absent + s.notIn, style: 'int' }], ['Total worked (hrs)', { v: this.hours(s.workedMinutes), style: 'hours' }],
         ['Total break (hrs)', { v: this.hours(s.breakMinutes), style: 'hours' }], ['Over break limit', { v: s.overBreak, style: 'int' }],
       ];
       const teamRows: Cell[][] = [...byTeam.entries()].map(([name, rs]) => { const t = this.summarize(rs); return [name, { v: t.total, style: 'int' }, { v: t.present, style: 'int' }, { v: t.late, style: 'int' }, { v: t.leave, style: 'int' }, { v: t.absent + t.notIn, style: 'int' }]; });
       sheets = [
-        { name: 'Summary', title: `Attendance summary · ${date} (${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][wd]})`, columns: [{ header: 'Metric', width: 28 }, { header: 'Value', width: 14 }], rows: sum },
+        { name: 'Summary', title: `Attendance summary · ${date} (${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][wd]})${filterDesc ? ` · ${filterDesc}` : ''}`, columns: [{ header: 'Metric', width: 28 }, { header: 'Value', width: 28 }], rows: sum },
         { name: 'By team', columns: [{ header: 'Team', width: 24 }, { header: 'People', width: 10 }, { header: 'Present', width: 10 }, { header: 'Late', width: 10 }, { header: 'On leave', width: 10 }, { header: 'Absent', width: 10 }], rows: teamRows },
-        this.dailySheet(rows, `Daily attendance · ${date}`),
-        this.breaksSheet(rows, false),
+        this.dailySheet(rows, `Daily attendance · ${date}${filterDesc ? ` · ${filterDesc}` : ''}`),
+        this.breaksSheet(rows),
       ];
-      filename = `attendance-daily-${date}`;
+      const suffix = [role ? role.toLowerCase() : '', q.teamId ? 'team' : '', q.batchId ? 'batch' : ''].filter(Boolean).join('-');
+      filename = `attendance-daily-${date}${suffix ? `-${suffix}` : ''}`;
     } else if (type === 'month') {
-      if (me.role === 'EMPLOYEE') throw new ForbiddenException('Forbidden');
+      if (me.role === 'EMPLOYEE' || me.role === 'HR_SUPPORT') throw new ForbiddenException('Forbidden');
       const { from, to } = this.rangeFrom({ month: q.month });
-      const users = await this.scopedUsers(me, q, from);
+      const users = await this.scopedUsers(me, { ...q, role }, from);
       const { rows, days, working } = await this.compute(users, from, to);
+      const filterDesc = await this.filterSummary(q, role);
       const byUser = new Map<string, Row[]>();
       for (const r of rows) byUser.set(r.userId, [...(byUser.get(r.userId) ?? []), r]);
       const people = users.filter((u) => byUser.has(u.id));
       const summaryRows: Cell[][] = people.map((u) => {
         const rs = byUser.get(u.id)!; const s = this.personSummary(rs, working);
-        return [u.displayName, u.email, u.team?.name ?? '', u.batch?.name ?? '', { v: s.workingDays, style: 'int' }, { v: s.present, style: 'int' }, { v: s.onTime, style: 'int' }, { v: s.late, style: 'int' }, { v: s.halfDay, style: 'int' }, { v: s.leave, style: 'int' }, { v: s.absent + s.notIn, style: 'int' }, { v: s.attendancePct, style: 'hours' }, { v: this.hours(s.workedMinutes), style: 'hours' }, { v: this.hours(s.avgWorkedMinutes), style: 'hours' }, { v: s.breakMinutes, style: 'int' }];
+        return [
+          u.displayName,
+          u.email,
+          ATTENDANCE_ROLE_LABEL[u.role] ?? u.role,
+          u.team?.name ?? '',
+          u.batch?.name ?? '',
+          { v: s.workingDays, style: 'int' },
+          { v: s.present, style: 'int' },
+          { v: s.onTime, style: 'int' },
+          { v: s.late, style: 'int' },
+          { v: s.halfDay, style: 'int' },
+          { v: s.leave, style: 'int' },
+          { v: s.absent + s.notIn, style: 'int' },
+          { v: s.attendancePct, style: 'hours' },
+          { v: this.hours(s.workedMinutes), style: 'hours' },
+          { v: this.hours(s.avgWorkedMinutes), style: 'hours' },
+          { v: s.breakMinutes, style: 'int' },
+        ];
       });
-      const gridCols = [{ header: 'Name', width: 26 }, { header: 'Team', width: 16 }, ...days.map((d) => ({ header: `${d.slice(8)}\n${['S', 'M', 'T', 'W', 'T', 'F', 'S'][weekday(d)]}`, width: 5 })), { header: 'P', width: 6 }, { header: 'L', width: 6 }, { header: 'H', width: 6 }, { header: 'LV', width: 6 }, { header: 'A', width: 6 }];
+      const gridCols = [
+        { header: 'Name', width: 26 },
+        { header: 'Role', width: 14 },
+        { header: 'Team', width: 16 },
+        ...days.map((d) => ({ header: `${d.slice(8)}\n${['S', 'M', 'T', 'W', 'T', 'F', 'S'][weekday(d)]}`, width: 5 })),
+        { header: 'P', width: 6 },
+        { header: 'L', width: 6 },
+        { header: 'H', width: 6 },
+        { header: 'LV', width: 6 },
+        { header: 'A', width: 6 },
+      ];
       const grid: Cell[][] = people.map((u) => {
         const map = new Map(byUser.get(u.id)!.map((r) => [r.day, r]));
         const cnt = { P: 0, L: 0, H: 0, LV: 0, A: 0 };
@@ -500,23 +639,40 @@ export class AttendanceService {
           if (code === 'P') cnt.P++; else if (code === 'L') cnt.L++; else if (code === 'H') cnt.H++; else if (code === 'LV') cnt.LV++; else if (code === 'A') cnt.A++;
           return { v: code, style: code === 'P' ? 'good' : code === 'L' || code === 'H' ? 'warn' : code === 'A' ? 'bad' : 'muted' };
         });
-        return [u.displayName, u.team?.name ?? '', ...cells, { v: cnt.P, style: 'int' }, { v: cnt.L, style: 'int' }, { v: cnt.H, style: 'int' }, { v: cnt.LV, style: 'int' }, { v: cnt.A, style: 'int' }];
+        return [u.displayName, ATTENDANCE_ROLE_LABEL[u.role] ?? u.role, u.team?.name ?? '', ...cells, { v: cnt.P, style: 'int' }, { v: cnt.L, style: 'int' }, { v: cnt.H, style: 'int' }, { v: cnt.LV, style: 'int' }, { v: cnt.A, style: 'int' }];
       });
       const detail = rows.filter((r) => r.state !== 'OFF' || r.checkInAt);
-      const detSheet = this.dailySheet(detail, `Details · ${from} to ${to}`);
+      const detSheet = this.dailySheet(detail, `Details · ${from} to ${to}${filterDesc ? ` · ${filterDesc}` : ''}`);
       detSheet.name = 'Details';
-      detSheet.columns.splice(1, 0, { header: 'Date', width: 12 });
-      detSheet.rows = detail.map((r, i) => { const row = this.dailySheet([r], '').rows[0]; row[0] = { v: i + 1, style: 'int' }; row.splice(1, 0, { v: dayToDate(r.day) as any, style: 'date' }); return row; });
       sheets = [
         {
-          name: 'Month summary', title: `Monthly attendance · ${q.month ?? from.slice(0, 7)}  (P = present, L = late, H = half day, LV = leave, A = absent)`,
-          columns: [{ header: 'Name', width: 26 }, { header: 'Email', width: 30 }, { header: 'Team', width: 18 }, { header: 'Batch', width: 18 }, { header: 'Working days', width: 10 }, { header: 'Present', width: 9 }, { header: 'On time', width: 9 }, { header: 'Late', width: 8 }, { header: 'Half day', width: 9 }, { header: 'Leave', width: 8 }, { header: 'Absent', width: 8 }, { header: 'Attendance %', width: 12 }, { header: 'Total hours', width: 11 }, { header: 'Avg hrs / day', width: 12 }, { header: 'Break (min)', width: 11 }],
+          name: 'Month summary', title: `Monthly attendance · ${q.month ?? from.slice(0, 7)}${filterDesc ? ` · ${filterDesc}` : ''}  (P = present, L = late, H = half day, LV = leave, A = absent)`,
+          columns: [
+            { header: 'Name', width: 26 },
+            { header: 'Email', width: 30 },
+            { header: 'Role', width: 14 },
+            { header: 'Team', width: 18 },
+            { header: 'Batch', width: 18 },
+            { header: 'Working days', width: 10 },
+            { header: 'Present', width: 9 },
+            { header: 'On time', width: 9 },
+            { header: 'Late', width: 8 },
+            { header: 'Half day', width: 9 },
+            { header: 'Leave', width: 8 },
+            { header: 'Absent', width: 8 },
+            { header: 'Attendance %', width: 12 },
+            { header: 'Total hours', width: 11 },
+            { header: 'Avg hrs / day', width: 12 },
+            { header: 'Break (min)', width: 11 },
+          ],
           rows: summaryRows,
         },
-        { name: 'Day grid', title: `Attendance register · ${from} to ${to}`, columns: gridCols, rows: grid },
+        { name: 'Day grid', title: `Attendance register · ${from} to ${to}${filterDesc ? ` · ${filterDesc}` : ''}`, columns: gridCols, rows: grid },
         detSheet,
+        this.breaksSheet(detail),
       ];
-      filename = `attendance-monthly-${from.slice(0, 7)}`;
+      const suffix = [role ? role.toLowerCase() : '', q.teamId ? 'team' : '', q.batchId ? 'batch' : ''].filter(Boolean).join('-');
+      filename = `attendance-monthly-${from.slice(0, 7)}${suffix ? `-${suffix}` : ''}`;
     } else if (type === 'person') {
       const userId = q.userId ?? me.id;
       await this.assertCanSee(me, userId);
@@ -528,15 +684,37 @@ export class AttendanceService {
       const days = rows.filter((r) => r.state !== 'OFF' || r.checkInAt);
       const daySheet = this.dailySheet(days, `${user.displayName} · ${from} to ${to}`);
       daySheet.name = 'Days';
-      daySheet.columns.splice(1, 4, { header: 'Date', width: 12 }, { header: 'Weekday', width: 10 });
-      daySheet.rows = days.map((r, i) => { const base = this.dailySheet([r], '').rows[0]; return [{ v: i + 1, style: 'int' }, { v: dayToDate(r.day) as any, style: 'date' }, ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][weekday(r.day)], ...base.slice(6)]; });
+      daySheet.columns.splice(2, 0, { header: 'Weekday', width: 10 });
+      daySheet.rows = daySheet.rows.map((row, idx) => {
+        const copy = [...row];
+        copy.splice(2, 0, ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][weekday(days[idx].day)]);
+        return copy;
+      });
       sheets = [
         {
-          name: 'Summary', title: `${user.displayName} · attendance ${from} to ${to}`, columns: [{ header: 'Metric', width: 26 }, { header: 'Value', width: 18 }],
-          rows: [['Name', user.displayName], ['Email', user.email], ['Team', user.team?.name ?? ''], ['Batch', user.batch?.name ?? ''], ['Working days', { v: s.workingDays, style: 'int' }], ['Present', { v: s.present, style: 'int' }], ['  on time', { v: s.onTime, style: 'int' }], ['  late', { v: s.late, style: 'int' }], ['  half day', { v: s.halfDay, style: 'int' }], ['On leave', { v: s.leave, style: 'int' }], ['Absent', { v: s.absent + s.notIn, style: 'int' }], ['Attendance %', { v: s.attendancePct, style: 'hours' }], ['Total worked (hrs)', { v: this.hours(s.workedMinutes), style: 'hours' }], ['Average hrs / present day', { v: this.hours(s.avgWorkedMinutes), style: 'hours' }], ['Total break (min)', { v: s.breakMinutes, style: 'int' }]],
+          name: 'Summary', title: `${user.displayName} · attendance ${from} to ${to}`, columns: [{ header: 'Metric', width: 26 }, { header: 'Value', width: 24 }],
+          rows: [
+            ['Name', user.displayName],
+            ['Email', user.email],
+            ['Role', ATTENDANCE_ROLE_LABEL[user.role] ?? user.role],
+            ['Team', user.team?.name ?? ''],
+            ['Batch', user.batch?.name ?? ''],
+            ['Period', `${from} to ${to}`],
+            ['Working days', { v: s.workingDays, style: 'int' }],
+            ['Present', { v: s.present, style: 'int' }],
+            ['  on time', { v: s.onTime, style: 'int' }],
+            ['  late', { v: s.late, style: 'int' }],
+            ['  half day', { v: s.halfDay, style: 'int' }],
+            ['On leave', { v: s.leave, style: 'int' }],
+            ['Absent', { v: s.absent + s.notIn, style: 'int' }],
+            ['Attendance %', { v: s.attendancePct, style: 'hours' }],
+            ['Total worked (hrs)', { v: this.hours(s.workedMinutes), style: 'hours' }],
+            ['Average hrs / present day', { v: this.hours(s.avgWorkedMinutes), style: 'hours' }],
+            ['Total break (min)', { v: s.breakMinutes, style: 'int' }],
+          ],
         },
         daySheet,
-        this.breaksSheet(days, true),
+        this.breaksSheet(days),
       ];
       filename = `attendance-${user.displayName.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'person'}-${from.slice(0, 10)}_${to.slice(0, 10)}`;
     } else {
@@ -545,20 +723,9 @@ export class AttendanceService {
 
     if (csv) {
       const main = sheets.find((s) => ['Daily', 'Details', 'Days'].includes(s.name)) ?? sheets[0];
-      return { filename: `${filename}.csv`, mime: 'text/csv; charset=utf-8', body: Buffer.from(this.toCsv(main)) };
+      return { filename: `${filename}.csv`, mime: 'text/csv; charset=utf-8', body: Buffer.from(sheetToCsv(main)) };
     }
     return { filename: `${filename}.xlsx`, mime: XLSX_MIME, body: buildXlsx(sheets) };
-  }
-
-  private toCsv(sh: Sheet): string {
-    const cell = (c: Cell): string => {
-      let v: any = c && typeof c === 'object' && !(c instanceof Date) ? c.v : c;
-      if (v instanceof Date) v = `${v.toISOString().slice(0, 10)} ${v.toISOString().slice(11, 16)}`.replace(/^1970-01-01 /, '').replace(/^1899-12-30 /, '');
-      let s = v === null || v === undefined ? '' : String(v);
-      if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    return '\uFEFF' + [sh.columns.map((c) => cell(c.header.replace('\n', ' '))).join(','), ...sh.rows.map((r) => sh.columns.map((_, i) => cell(r[i])).join(','))].join('\n') + '\n';
   }
 
   // =====================================================================
@@ -576,9 +743,9 @@ export class AttendanceService {
     await this.breakWatch(cfg);
     if (working && nowMin >= cfg.shiftStart + cfg.graceMinutes + 10 && nowMin < cfg.shiftEnd) await this.nudgeNotCheckedIn(today);
     if (working && nowMin >= cfg.shiftEnd + 30 && nowMin < cfg.autoCheckout + 120) await this.endOfDaySummary(today);
-    if (nowMin >= cfg.autoCheckout) await this.autoClose(today);
-    // a forgotten check-out from yesterday must never stay open
-    if (nowMin < cfg.autoCheckout) await this.autoClose(addDays(today, -1));
+    // Any open check-in from an earlier day (yesterday or older) must never stay open indefinitely
+    await this.autoCloseStale(today, cfg);
+    if (nowMin >= cfg.autoCheckout) await this.autoClose(today, cfg);
   }
 
   /** Someone has been on one break longer than the limit: ask them, and tell their lead once. */
@@ -649,9 +816,31 @@ export class AttendanceService {
     }
   }
 
+  /** Closes any open check-in from prior days (< today), including late-night check-ins after autoCheckout. */
+  private async autoCloseStale(today: string, cfg: AttendanceConfig) {
+    const open = await this.prisma.attendanceDay.findMany({
+      where: { day: { lt: dayToDate(today) }, checkInAt: { not: null }, checkOutAt: null },
+      include: { breaks: true },
+      orderBy: { day: 'asc' },
+      take: 500,
+    });
+    const nowD = new Date();
+    for (const rec of open) {
+      const recDay = rec.day.toISOString().slice(0, 10);
+      const cap = localTimeToInstant(recDay, `${Math.floor(cfg.autoCheckout / 60)}:${String(cfg.autoCheckout % 60).padStart(2, '0')}`);
+      let at = nowD < cap ? nowD : cap;
+      if (at <= rec.checkInAt!) {
+        const endOfDay = localTimeToInstant(recDay, '23:59');
+        at = endOfDay > rec.checkInAt! ? (nowD < endOfDay ? nowD : endOfDay) : new Date(rec.checkInAt!.getTime() + 60_000);
+      }
+      await this.closeRecord(rec, at, { note: 'Auto check-out (forgot to check out)', auto: true });
+      await this.notifications.notify([rec.userId], { type: 'ATTENDANCE', title: 'You were checked out automatically', body: `Your check-in on ${recDay} was closed automatically. Your lead can correct the time if needed.`, link: '/attendance' });
+      this.changed(rec.userId, rec.teamId);
+    }
+  }
+
   /** People who forgot to check out are closed at the configured time and flagged "auto-closed" for review. */
-  private async autoClose(day: string) {
-    const cfg = await this.calendar.attendanceConfig();
+  private async autoClose(day: string, cfg: AttendanceConfig) {
     const open = await this.prisma.attendanceDay.findMany({
       where: { day: dayToDate(day), checkInAt: { not: null }, checkOutAt: null }, include: { breaks: true }, take: 500,
     });

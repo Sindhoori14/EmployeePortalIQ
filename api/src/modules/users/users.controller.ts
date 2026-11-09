@@ -9,7 +9,7 @@ import { BulkCreateUsersDto, CreateUserDto, ListUsersQuery, UpdateUserDto } from
 export class UsersController {
   constructor(private users: UsersService) {}
 
-  @Roles('ADMIN', 'TEAM_LEAD', 'COORDINATOR')
+  @Roles('ADMIN', 'TEAM_LEAD', 'COORDINATOR', 'HR_MANAGER')
   @Get()
   list(@CurrentUser() me: RequestUser, @Query() q: ListUsersQuery) {
     return this.users.list(me, q);

@@ -1,4 +1,15 @@
-import { breakMinutes, fmtMinutes, lateMinutes, stateFor, statusFor, workedAndBreak } from './attendance.logic';
+import {
+  breakMinutes,
+  fmtMinutes,
+  formatBreakIntervals,
+  lateMinutes,
+  parseAttendanceRole,
+  sheetToCsv,
+  stateFor,
+  statusFor,
+  workedAndBreak,
+} from './attendance.logic';
+import { dayToDate, tzShift } from '../../common/time';
 
 process.env.APP_TZ = 'Asia/Kolkata';
 const cfg = { shiftStart: 9 * 60 + 30, shiftEnd: 18 * 60 + 30, autoCheckout: 23 * 60 + 30, graceMinutes: 15, halfDayMinutes: 240, maxBreakMinutes: 60, maxSingleBreakMinutes: 45 };
@@ -50,5 +61,42 @@ describe('attendance rules', () => {
   it('formats durations', () => {
     expect(fmtMinutes(45)).toBe('45m');
     expect(fmtMinutes(125)).toBe('2h 05m');
+  });
+
+  it('validates attendance role filters safely', () => {
+    expect(parseAttendanceRole(undefined)).toEqual({ role: undefined, invalid: false });
+    expect(parseAttendanceRole('all')).toEqual({ role: undefined, invalid: false });
+    expect(parseAttendanceRole('hr_manager')).toEqual({ role: 'HR_MANAGER', invalid: false });
+    expect(parseAttendanceRole('HR_SUPPORT')).toEqual({ role: 'HR_SUPPORT', invalid: false });
+    expect(parseAttendanceRole('TEAM_LEAD')).toEqual({ role: 'TEAM_LEAD', invalid: false });
+    expect(parseAttendanceRole('PROJECT_LEAD')).toEqual({ invalid: true });
+    expect(parseAttendanceRole('INVALID_ROLE')).toEqual({ invalid: true });
+  });
+
+  it('formats break intervals chronologically in IST', () => {
+    expect(formatBreakIntervals([])).toBe('');
+    expect(
+      formatBreakIntervals([
+        { reason: 'LUNCH', startAt: ist('13:00'), endAt: ist('13:45'), minutes: 45 },
+        { reason: 'TEA', startAt: ist('16:00'), endAt: null, minutes: 10 },
+      ]),
+    ).toBe('13:00-13:45 (Lunch, 45m); 16:00-now (Tea / coffee, 10m)');
+  });
+
+  it('serializes CSV dates as YYYY-MM-DD, times as HH:MM, and escapes formulas', () => {
+    const csv = sheetToCsv({
+      name: 'Daily',
+      columns: [{ header: 'Date' }, { header: 'Check-in' }, { header: 'Note' }],
+      rows: [
+        [
+          { v: dayToDate('2026-10-05') as any, style: 'date' },
+          { v: tzShift(ist('09:30')) as any, style: 'time' },
+          '=SUM(A1:A2)',
+        ],
+      ],
+    });
+    const lines = csv.replace(/^\uFEFF/, '').trim().split('\n');
+    expect(lines[0]).toBe('Date,Check-in,Note');
+    expect(lines[1]).toBe("2026-10-05,09:30,'=SUM(A1:A2)");
   });
 });

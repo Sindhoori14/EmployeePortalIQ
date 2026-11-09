@@ -47,7 +47,21 @@ export class FilesService {
   /** Streams the request body to disk (never held in memory), hashing and size-limiting as it goes. */
   private async receive(req: Request, maxBytes: number) {
     const declared = Number(req.headers['content-length'] ?? 0);
-    if (declared > maxBytes) throw new PayloadTooLargeException(`File is too large (max ${Math.round(maxBytes / 1048576)} MB)`);
+    if (declared > maxBytes) {
+      if (declared <= maxBytes + 4 * 1024 * 1024) {
+        await new Promise<void>((done) => {
+          let seen = 0;
+          const finish = () => { req.off('data', onData); req.off('end', finish); req.off('error', finish); clearTimeout(t); done(); };
+          const onData = (c: Buffer) => { seen += c.length; if (seen > declared) finish(); };
+          const t = setTimeout(finish, 1000);
+          req.on('data', onData);
+          req.once('end', finish);
+          req.once('error', finish);
+          req.resume();
+        });
+      }
+      throw new PayloadTooLargeException(`File is too large (max ${Math.round(maxBytes / 1048576)} MB)`);
+    }
     try {
       const st = await fs.statfs(UPLOAD_ROOT);
       if (st.bavail * st.bsize < MIN_FREE_BYTES) throw new ServiceUnavailableException('Server storage is almost full. Please tell your admin.');

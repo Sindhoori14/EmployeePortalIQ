@@ -43,8 +43,14 @@ export class AttendanceController {
 
   @Roles('ADMIN', 'TEAM_LEAD', 'COORDINATOR', 'HR_MANAGER')
   @Get('board')
-  board(@CurrentUser() me: RequestUser, @Query('date') date?: string, @Query('teamId') teamId?: string, @Query('batchId') batchId?: string) {
-    return this.att.board(me, { date, teamId, batchId });
+  board(
+    @CurrentUser() me: RequestUser,
+    @Query('date') date?: string,
+    @Query('teamId') teamId?: string,
+    @Query('batchId') batchId?: string,
+    @Query('role') role?: string,
+  ) {
+    return this.att.board(me, { date, teamId, batchId, role });
   }
 
   @Get('person/:userId')
@@ -62,7 +68,7 @@ export class AttendanceController {
   @Get('export')
   async export(
     @CurrentUser() me: RequestUser, @Res() res: Response,
-    @Query() q: { type?: string; date?: string; month?: string; from?: string; to?: string; userId?: string; teamId?: string; batchId?: string; format?: string },
+    @Query() q: { type?: string; date?: string; month?: string; from?: string; to?: string; userId?: string; teamId?: string; batchId?: string; role?: string; format?: string },
   ) {
     const f = await this.att.export(me, q);
     res.setHeader('Content-Type', f.mime);

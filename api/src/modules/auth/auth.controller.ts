@@ -52,9 +52,26 @@ export class AuthController {
 
   @Post('change-password')
   @HttpCode(200)
-  async change(@CurrentUser() u: RequestUser, @Body() dto: ChangePasswordDto, @Req() req: Request) {
-    await this.auth.changePassword(u.id, dto.currentPassword, dto.newPassword, this.ip(req));
-    return { ok: true };
+  async change(
+    @CurrentUser() u: RequestUser,
+    @Body() dto: ChangePasswordDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const hasRefreshCookie = Boolean(req.cookies?.refresh);
+    const result = await this.auth.changePassword(
+      u.id,
+      dto.currentPassword,
+      dto.newPassword,
+      this.ip(req),
+      dto.confirmNewPassword,
+      req.headers['user-agent'],
+      hasRefreshCookie,
+    );
+    if (result.access && result.rawRefresh && result.refreshExp) {
+      authCookies(res, result.access, result.rawRefresh, result.refreshExp);
+    }
+    return { ok: true, user: this.auth.sanitize(result.user) };
   }
 
   @Get('sessions')
